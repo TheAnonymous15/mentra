@@ -2,11 +2,15 @@ package com.example.mentra
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.*
 import com.example.mentra.core.common.permissions.PermissionManager
+import com.example.mentra.dialer.ui.DialerScreen
+import com.example.mentra.dialer.ui.InCallScreen
 import com.example.mentra.health.ui.HealthScreen
+import com.example.mentra.messaging.MessagePreloader
 import com.example.mentra.messaging.ui.ConversationScreen
 import com.example.mentra.messaging.ui.MessagingScreen
 import com.example.mentra.navigation.ui.NavigationScreen
@@ -23,19 +27,32 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var permissionManager: PermissionManager
 
+    @Inject
+    lateinit var messagePreloader: MessagePreloader
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Start preloading messages in background
+        messagePreloader.startPreloading()
+
         setContent {
             MentraTheme {
-                MentraApp(permissionManager = permissionManager)
+                MentraApp(
+                    permissionManager = permissionManager,
+                    messagePreloader = messagePreloader
+                )
             }
         }
     }
 }
 
 @Composable
-fun MentraApp(permissionManager: PermissionManager) {
+fun MentraApp(
+    permissionManager: PermissionManager,
+    messagePreloader: MessagePreloader
+) {
     val setupComplete by permissionManager.setupComplete.collectAsState()
     var showPermissionScreen by remember { mutableStateOf(!setupComplete) }
     var currentScreen by remember { mutableStateOf("home") }
@@ -44,6 +61,22 @@ fun MentraApp(permissionManager: PermissionManager) {
     // Update when permissions change
     LaunchedEffect(setupComplete) {
         showPermissionScreen = !setupComplete
+    }
+
+    // Handle back button press - return to home from any screen
+    BackHandler(enabled = currentScreen != "home" && !showPermissionScreen) {
+        when (currentScreen) {
+            "conversation" -> {
+                conversationPhoneNumber = null
+                currentScreen = "messaging"
+            }
+            "incall" -> {
+                // Don't allow back from in-call screen
+            }
+            else -> {
+                currentScreen = "home"
+            }
+        }
     }
 
     when {
@@ -80,6 +113,20 @@ fun MentraApp(permissionManager: PermissionManager) {
                 }
             )
         }
+        currentScreen == "dialer" -> {
+            DialerScreen(
+                onNavigateToInCall = {
+                    currentScreen = "incall"
+                }
+            )
+        }
+        currentScreen == "incall" -> {
+            InCallScreen(
+                onCallEnded = {
+                    currentScreen = "dialer"
+                }
+            )
+        }
         else -> {
             // Main home screen after permission setup
             HomeScreen(
@@ -89,6 +136,7 @@ fun MentraApp(permissionManager: PermissionManager) {
                         "health" -> currentScreen = "health"
                         "navigation" -> currentScreen = "navigation"
                         "messaging" -> currentScreen = "messaging"
+                        "dialer", "phone" -> currentScreen = "dialer"
                         else -> {
                             // Other features not implemented yet
                         }

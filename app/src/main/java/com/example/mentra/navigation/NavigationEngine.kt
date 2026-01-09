@@ -63,6 +63,33 @@ class NavigationEngine @Inject constructor(
 
     private var locationCallback: LocationCallback? = null
 
+    init {
+        // Try to get last known location immediately
+        getLastKnownLocation()
+    }
+
+    /**
+     * Get last known location for quick initial display
+     */
+    @Suppress("MissingPermission")
+    private fun getLastKnownLocation() {
+        if (!hasLocationPermission()) return
+
+        fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+            location?.let {
+                _currentLocation.value = NavigationLocation(
+                    latitude = it.latitude,
+                    longitude = it.longitude,
+                    altitude = it.altitude,
+                    accuracy = it.accuracy,
+                    bearing = it.bearing,
+                    speed = it.speed,
+                    timestamp = it.time
+                )
+            }
+        }
+    }
+
     /**
      * Start real-time location tracking
      */
@@ -74,6 +101,9 @@ class NavigationEngine @Inject constructor(
         }
 
         _navigationState.value = NavigationState.TRACKING
+
+        // Get last known location first for quick response
+        getLastKnownLocation()
 
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,

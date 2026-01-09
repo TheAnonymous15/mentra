@@ -53,6 +53,13 @@ fun NavigationScreen(
     var showPOISearch by remember { mutableStateOf(false) }
     var showLocationShare by remember { mutableStateOf(false) }
 
+    // Auto-start tracking when screen opens
+    LaunchedEffect(Unit) {
+        if (!isTracking) {
+            viewModel.toggleTracking()
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -69,7 +76,8 @@ fun NavigationScreen(
         OSMMapView(
             currentLocation = currentLocation,
             mapType = mapType,
-            destination = selectedDestination
+            destination = selectedDestination,
+            isTracking = isTracking
         )
 
         // Top Glass Control Panel
@@ -141,57 +149,115 @@ fun NavigationScreen(
 fun OSMMapView(
     currentLocation: com.example.mentra.navigation.NavigationLocation?,
     mapType: MapType,
-    destination: com.example.mentra.navigation.NavigationLocation?
+    destination: com.example.mentra.navigation.NavigationLocation?,
+    isTracking: Boolean
 ) {
     val context = LocalContext.current
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+
+    // Default location (Nairobi, Kenya as fallback)
+    val defaultLocation = GeoPoint(-1.2921, 36.8219)
 
     LaunchedEffect(Unit) {
         Configuration.getInstance().userAgentValue = context.packageName
+        Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", 0))
     }
 
-    AndroidView(
-        factory = { ctx ->
-            MapView(ctx).apply {
-                setTileSource(TileSourceFactory.MAPNIK)
-                setMultiTouchControls(true)
-                controller.setZoom(15.0)
-                controller.setCenter(GeoPoint(0.0, 0.0))
-            }
-        },
-        update = { mapView ->
-            when (mapType) {
-                MapType.SATELLITE -> mapView.setTileSource(TileSourceFactory.USGS_SAT)
-                MapType.TERRAIN -> mapView.setTileSource(TileSourceFactory.OpenTopo)
-                MapType.HYBRID -> mapView.setTileSource(TileSourceFactory.USGS_SAT)
-                MapType.STREET -> mapView.setTileSource(TileSourceFactory.MAPNIK)
-            }
-
-            currentLocation?.let { location ->
-                val geoPoint = GeoPoint(location.latitude, location.longitude)
-                mapView.controller.setCenter(geoPoint)
-                mapView.overlays.clear()
-
-                val marker = Marker(mapView).apply {
-                    position = geoPoint
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                    title = "You are here"
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { ctx ->
+                MapView(ctx).apply {
+                    mapViewRef = this
+                    setTileSource(TileSourceFactory.MAPNIK)
+                    setMultiTouchControls(true)
+                    controller.setZoom(16.0)
+                    // Start with default location
+                    controller.setCenter(defaultLocation)
+                    // Enable zoom controls
+                    setBuiltInZoomControls(false)
+                    // Important: Set min/max zoom
+                    minZoomLevel = 4.0
+                    maxZoomLevel = 19.0
                 }
-                mapView.overlays.add(marker)
+            },
+            update = { mapView ->
+                // Update tile source based on map type
+                when (mapType) {
+                    MapType.SATELLITE -> mapView.setTileSource(TileSourceFactory.USGS_SAT)
+                    MapType.TERRAIN -> mapView.setTileSource(TileSourceFactory.OpenTopo)
+                    MapType.HYBRID -> mapView.setTileSource(TileSourceFactory.USGS_SAT)
+                    MapType.STREET -> mapView.setTileSource(TileSourceFactory.MAPNIK)
+                }
 
-                destination?.let { dest ->
-                    val destMarker = Marker(mapView).apply {
-                        position = GeoPoint(dest.latitude, dest.longitude)
+                // Update location if available
+                currentLocation?.let { location ->
+                    val geoPoint = GeoPoint(location.latitude, location.longitude)
+                    mapView.controller.animateTo(geoPoint)
+                    mapView.overlays.clear()
+
+                    // Current location marker
+                    val marker = Marker(mapView).apply {
+                        position = geoPoint
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        title = "Destination"
+                        title = "You are here"
+                        snippet = "Lat: ${String.format("%.4f", location.latitude)}, Lon: ${String.format("%.4f", location.longitude)}"
                     }
-                    mapView.overlays.add(destMarker)
-                }
+                    mapView.overlays.add(marker)
 
-                mapView.invalidate()
+                    // Destination marker if set
+                    destination?.let { dest ->
+                        val destMarker = Marker(mapView).apply {
+                            position = GeoPoint(dest.latitude, dest.longitude)
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            title = "Destination"
+                        }
+                        mapView.overlays.add(destMarker)
+                    }
+
+                    mapView.invalidate()
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Show loading indicator if tracking but no location yet
+        if (isTracking && currentLocation == null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF1A1F3A)
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = Color(0xFF4EC9B0),
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Text(
+                            text = "Getting your location...",
+                            color = Color.White,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "Make sure GPS is enabled",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
             }
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+        }
+    }
 }
 
 @Composable

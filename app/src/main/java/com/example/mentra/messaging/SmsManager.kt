@@ -2,14 +2,17 @@ package com.example.mentra.messaging
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.ContactsContract
 import android.provider.Telephony
-import android.telephony.SmsManager
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,11 +28,15 @@ import javax.inject.Singleton
  * - Conversation threading
  * - Search & filter
  * - Message statistics
+ * - Dual SIM support
+ * - Auto-refresh on incoming messages
  */
 @Singleton
 class SmsManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val simCardManager: SimCardManager
 ) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
@@ -40,7 +47,22 @@ class SmsManager @Inject constructor(
     private val _contacts = MutableStateFlow<List<Contact>>(emptyList())
     val contacts: StateFlow<List<Contact>> = _contacts.asStateFlow()
 
-    private val smsManager = context.getSystemService(Context.TELEPHONY_SERVICE) as android.telephony.SmsManager
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    // Get SmsManager properly based on Android version
+    private val smsManager: android.telephony.SmsManager
+        get() = simCardManager.getSelectedSmsManager()
+
+    init {
+        // Listen for incoming messages
+        scope.launch {
+            SmsReceiverService.incomingMessages.collect { message ->
+                // Auto-refresh conversations when new message arrives
+                loadConversations()
+            }
+        }
+    }
 
     /**
      * Load all SMS conversations
@@ -199,18 +221,26 @@ class SmsManager @Inject constructor(
     }
 
     /**
-     * Send SMS message
+     * Send SMS message with optional SIM selection
      */
     suspend fun sendSms(
         phoneNumber: String,
-        message: String
+        message: String,
+        subscriptionId: Int = -1
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
+            // Use specific SIM or default
+            val manager = if (subscriptionId > 0) {
+                simCardManager.getSmsManagerForSim(subscriptionId)
+            } else {
+                smsManager
+            }
+
             // For long messages, divide into parts
-            val parts = smsManager.divideMessage(message)
+            val parts = manager.divideMessage(message)
 
             if (parts.size == 1) {
-                smsManager.sendTextMessage(
+                manager.sendTextMessage(
                     phoneNumber,
                     null,
                     message,
@@ -218,7 +248,7 @@ class SmsManager @Inject constructor(
                     null
                 )
             } else {
-                smsManager.sendMultipartTextMessage(
+                manager.sendMultipartTextMessage(
                     phoneNumber,
                     null,
                     parts,

@@ -12,16 +12,27 @@ import javax.inject.Inject
 
 /**
  * Messaging ViewModel
- * Manages SMS state and operations
+ * Manages SMS state and operations with preloading support
  */
 @HiltViewModel
 class MessagingViewModel @Inject constructor(
-    private val smsManager: SmsManager
+    private val smsManager: SmsManager,
+    private val simCardManager: SimCardManager,
+    private val messagePreloader: MessagePreloader
 ) : ViewModel() {
 
-    val conversations: StateFlow<List<Conversation>> = smsManager.conversations
+    // Use preloaded conversations for instant display
+    val conversations: StateFlow<List<Conversation>> = messagePreloader.cachedConversations
     val messages: StateFlow<List<SmsMessage>> = smsManager.messages
-    val contacts: StateFlow<List<Contact>> = smsManager.contacts
+    val contacts: StateFlow<List<Contact>> = messagePreloader.cachedContacts
+
+    // SIM card management
+    val availableSims: StateFlow<List<SimInfo>> = simCardManager.availableSims
+    val selectedSimSlot: StateFlow<Int?> = simCardManager.selectedSimSlot
+
+    // Preload status
+    val isPreloaded: StateFlow<Boolean> = messagePreloader.isPreloaded
+    val preloadProgress: StateFlow<Float> = messagePreloader.preloadProgress
 
     private val _messageStats = MutableStateFlow<MessageStatistics?>(null)
     val messageStats: StateFlow<MessageStatistics?> = _messageStats.asStateFlow()
@@ -34,15 +45,19 @@ class MessagingViewModel @Inject constructor(
     }
 
     /**
-     * Load all messaging data
+     * Load all messaging data - uses preloaded data if available
      */
     private fun loadData() {
         viewModelScope.launch {
-            // Load conversations
-            smsManager.loadConversations()
+            // Check if data is already preloaded
+            if (!messagePreloader.isPreloaded.value) {
+                // If not preloaded yet, load normally
+                smsManager.loadConversations()
+                smsManager.loadContacts()
+            }
 
-            // Load contacts
-            smsManager.loadContacts()
+            // Always load SIMs (lightweight)
+            simCardManager.loadAvailableSims()
 
             // Update stats
             updateStats()
@@ -50,11 +65,23 @@ class MessagingViewModel @Inject constructor(
     }
 
     /**
-     * Load specific conversation
+     * Load specific conversation - uses cached data for instant display
      */
     fun loadConversation(phoneNumber: String) {
         viewModelScope.launch {
-            smsManager.loadMessages(phoneNumber)
+            // Try to get cached messages first (instant)
+            val cachedMessages = messagePreloader.getCachedMessages(phoneNumber)
+
+            if (cachedMessages != null && cachedMessages.isNotEmpty()) {
+                // Use cached data immediately
+                (smsManager.messages as? MutableStateFlow)?.value = cachedMessages
+
+                // Then refresh in background
+                smsManager.loadMessages(phoneNumber)
+            } else {
+                // No cache, load normally
+                smsManager.loadMessages(phoneNumber)
+            }
 
             // Mark all as read
             messages.value.forEach { message ->
@@ -66,13 +93,25 @@ class MessagingViewModel @Inject constructor(
     }
 
     /**
-     * Send SMS message
+     * Select SIM for sending
      */
-    fun sendMessage(phoneNumber: String, message: String) {
+    fun selectSim(slotIndex: Int) {
+        simCardManager.selectSim(slotIndex)
+    }
+
+    /**
+     * Check if multiple SIMs available
+     */
+    fun hasMultipleSims(): Boolean = simCardManager.hasMultipleSims()
+
+    /**
+     * Send SMS message with optional SIM selection
+     */
+    fun sendMessage(phoneNumber: String, message: String, subscriptionId: Int = -1) {
         viewModelScope.launch {
             _sendingState.value = SendingState.Sending
 
-            val result = smsManager.sendSms(phoneNumber, message)
+            val result = smsManager.sendSms(phoneNumber, message, subscriptionId)
 
             if (result.isSuccess) {
                 _sendingState.value = SendingState.Success

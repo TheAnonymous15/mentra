@@ -300,9 +300,17 @@ private fun FeatureGrid(onFeatureClick: (String) -> Unit) {
             FeatureItem(
                 id = "messaging",
                 title = "Messaging",
-                description = "SMS & calls",
+                description = "SMS & texts",
                 icon = Icons.Default.Message,
                 color = Color(0xFF00BCD4),
+                available = true
+            ),
+            FeatureItem(
+                id = "dialer",
+                title = "Phone",
+                description = "Calls & dialer",
+                icon = Icons.Default.Phone,
+                color = Color(0xFF4EC9B0),
                 available = true
             ),
             FeatureItem(

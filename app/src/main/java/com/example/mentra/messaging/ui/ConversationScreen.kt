@@ -692,24 +692,27 @@ fun MessageInputBar(
                 }
             }
 
-            // Schedule button - 3D style, same height as input
+            // Schedule button - 3D style, same height as input, orange/yellow theme
             if (onSchedule != null) {
                 Box(
                     modifier = Modifier
                         .height(56.dp)
                         .width(48.dp)
                         .shadow(
-                            elevation = if (canSend) 4.dp else 1.dp,
+                            elevation = if (canSend) 6.dp else 1.dp,
                             shape = RoundedCornerShape(12.dp),
-                            spotColor = if (canSend) NexusColors.accent else Color.Transparent
+                            spotColor = if (canSend) Color(0xFFFFE66D) else Color.Transparent
                         )
                         .background(
                             brush = if (canSend) {
-                                Brush.verticalGradient(
+                                Brush.radialGradient(
                                     colors = listOf(
-                                        NexusColors.accent.copy(alpha = 0.3f),
-                                        NexusColors.accent.copy(alpha = 0.2f)
-                                    )
+                                        Color(0xFFFFE66D).copy(alpha = 0.5f),
+                                        Color(0xFFFFD93D).copy(alpha = 0.3f),
+                                        Color(0xFFFFCC00).copy(alpha = 0.2f)
+                                    ),
+                                    center = Offset(0.3f, 0.3f),
+                                    radius = 180f
                                 )
                             } else {
                                 Brush.verticalGradient(
@@ -722,8 +725,8 @@ fun MessageInputBar(
                             shape = RoundedCornerShape(12.dp)
                         )
                         .border(
-                            1.dp,
-                            if (canSend) NexusColors.accent.copy(alpha = 0.4f) else NexusColors.textMuted.copy(alpha = 0.2f),
+                            1.5.dp,
+                            if (canSend) Color(0xFFFFE66D).copy(alpha = 0.5f) else NexusColors.textMuted.copy(alpha = 0.2f),
                             RoundedCornerShape(12.dp)
                         )
                         .clickable(enabled = canSend) { showSchedulePicker = true },
@@ -732,13 +735,13 @@ fun MessageInputBar(
                     Icon(
                         Icons.Default.Schedule,
                         contentDescription = "Schedule",
-                        tint = if (canSend) NexusColors.accent else NexusColors.textMuted,
+                        tint = if (canSend) Color(0xFFFFE66D) else NexusColors.textMuted,
                         modifier = Modifier.size(20.dp)
                     )
                 }
             }
 
-            // Send button - 3D style, same height as input
+            // Send button - 3D style, same height as input, green/cyan theme
             val sendScale by animateFloatAsState(
                 targetValue = if (canSend) 1f else 0.95f,
                 animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
@@ -751,17 +754,20 @@ fun MessageInputBar(
                     .width(48.dp)
                     .scale(sendScale)
                     .shadow(
-                        elevation = if (canSend) 6.dp else 1.dp,
+                        elevation = if (canSend) 8.dp else 1.dp,
                         shape = RoundedCornerShape(12.dp),
-                        spotColor = if (canSend) NexusColors.primary else Color.Transparent
+                        spotColor = if (canSend) Color(0xFF00F5D4) else Color.Transparent
                     )
                     .background(
                         brush = if (canSend) {
-                            Brush.verticalGradient(
+                            Brush.radialGradient(
                                 colors = listOf(
-                                    NexusColors.primary,
-                                    NexusColors.primary.copy(alpha = 0.8f)
-                                )
+                                    Color(0xFF00F5D4),
+                                    Color(0xFF00D4AA),
+                                    Color(0xFF00B38A)
+                                ),
+                                center = Offset(0.3f, 0.3f),
+                                radius = 200f
                             )
                         } else {
                             Brush.verticalGradient(
@@ -774,8 +780,8 @@ fun MessageInputBar(
                         shape = RoundedCornerShape(12.dp)
                     )
                     .border(
-                        1.dp,
-                        if (canSend) NexusColors.primary.copy(alpha = 0.3f) else NexusColors.textMuted.copy(alpha = 0.2f),
+                        1.5.dp,
+                        if (canSend) Color(0xFF00F5D4).copy(alpha = 0.3f) else NexusColors.textMuted.copy(alpha = 0.2f),
                         RoundedCornerShape(12.dp)
                     )
                     .clickable(enabled = canSend) {
@@ -1009,31 +1015,34 @@ fun MiniSimSelector3D(
             .height(56.dp)
             .width(42.dp)
             .shadow(
-                elevation = if (isSelected) 4.dp else 2.dp,
+                elevation = if (isSelected) 6.dp else 2.dp,
                 shape = RoundedCornerShape(12.dp),
-                spotColor = if (isSelected) NexusColors.primary else Color.Transparent
+                spotColor = if (isSelected) Color(0xFF00F5D4) else Color.Transparent
             )
             .background(
                 brush = if (isSelected) {
-                    Brush.verticalGradient(
+                    Brush.radialGradient(
                         colors = listOf(
-                            NexusColors.primary.copy(alpha = 0.3f),
-                            NexusColors.primary.copy(alpha = 0.2f)
-                        )
+                            Color(0xFF00F5D4).copy(alpha = 0.4f),
+                            Color(0xFF00D4AA).copy(alpha = 0.2f),
+                            Color(0xFF00B38A).copy(alpha = 0.1f)
+                        ),
+                        center = Offset(0.3f, 0.3f),
+                        radius = 200f
                     )
                 } else {
                     Brush.verticalGradient(
                         colors = listOf(
                             NexusColors.card,
-                            NexusColors.card.copy(alpha = 0.8f)
+                            NexusColors.card.copy(alpha = 0.7f)
                         )
                     )
                 },
                 shape = RoundedCornerShape(12.dp)
             )
             .border(
-                1.dp,
-                if (isSelected) NexusColors.primary.copy(alpha = 0.4f) else NexusColors.textMuted.copy(alpha = 0.2f),
+                1.5.dp,
+                if (isSelected) Color(0xFF00F5D4).copy(alpha = 0.5f) else NexusColors.textMuted.copy(alpha = 0.2f),
                 RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onClick),
@@ -1046,7 +1055,7 @@ fun MiniSimSelector3D(
             Icon(
                 Icons.Default.SimCard,
                 contentDescription = null,
-                tint = if (isSelected) NexusColors.primary else NexusColors.textMuted,
+                tint = if (isSelected) Color(0xFF00F5D4) else NexusColors.textMuted,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.height(2.dp))
@@ -1054,7 +1063,7 @@ fun MiniSimSelector3D(
                 text = "$index",
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (isSelected) NexusColors.primary else NexusColors.textMuted
+                color = if (isSelected) Color(0xFF00F5D4) else NexusColors.textMuted
             )
         }
     }

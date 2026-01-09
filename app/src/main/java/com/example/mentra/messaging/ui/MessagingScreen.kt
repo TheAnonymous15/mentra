@@ -106,9 +106,6 @@ fun MessagingScreen(
     // Preload status
     val isPreloaded by viewModel.isPreloaded.collectAsState()
     val preloadProgress by viewModel.preloadProgress.collectAsState()
-    val conversations by viewModel.conversations.collectAsState()
-    val contacts by viewModel.contacts.collectAsState()
-    val availableSims by viewModel.availableSims.collectAsState()
     val stats by viewModel.messageStats.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }

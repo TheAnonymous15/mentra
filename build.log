@@ -1,0 +1,171 @@
+> Task :app:clean
+> Task :core:common:clean
+> Task :core:data:clean
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:common:preBuild UP-TO-DATE
+> Task :core:common:preDebugBuild UP-TO-DATE
+> Task :core:data:preBuild UP-TO-DATE
+> Task :core:data:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugResValues
+> Task :core:data:writeDebugAarMetadata
+> Task :core:common:writeDebugAarMetadata
+> Task :core:common:generateDebugResValues
+> Task :core:common:generateDebugResources
+> Task :app:checkDebugAarMetadata
+> Task :core:common:packageDebugResources
+> Task :core:data:generateDebugResValues
+> Task :core:data:generateDebugResources
+> Task :core:data:packageDebugResources
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug
+> Task :core:common:extractDeepLinksDebug
+> Task :core:data:extractDeepLinksDebug
+> Task :core:common:compileDebugLibraryResources
+> Task :core:data:compileDebugLibraryResources
+> Task :core:common:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:data:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:common:parseDebugLocalResources
+> Task :core:common:javaPreCompileDebug
+> Task :core:data:javaPreCompileDebug
+> Task :core:data:parseDebugLocalResources
+> Task :app:parseDebugLocalResources
+> Task :app:mergeDebugResources
+> Task :app:javaPreCompileDebug
+> Task :app:mergeDebugShaders
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :core:common:mergeDebugShaders
+> Task :core:common:compileDebugShaders NO-SOURCE
+> Task :core:common:generateDebugAssets UP-TO-DATE
+> Task :core:common:processDebugManifest
+> Task :core:data:processDebugManifest
+> Task :core:common:packageDebugAssets
+> Task :core:common:generateDebugRFile
+> Task :core:data:generateDebugRFile
+
+> Task :app:processDebugMainManifest
+[org.tensorflow:tensorflow-lite:2.14.0] /Users/danielkinyua/.gradle/caches/8.13/transforms/c1ffab2ecd89c4f1b7699817fa5c2d12/transformed/tensorflow-lite-2.14.0/AndroidManifest.xml Warning:
+	Namespace 'org.tensorflow.lite' is used in multiple modules and/or libraries: org.tensorflow:tensorflow-lite:2.14.0, org.tensorflow:tensorflow-lite-api:2.14.0. Please ensure that all modules and libraries have a unique namespace. For more information, See https://developer.android.com/studio/build/configure-app-module#set-namespace
+[org.tensorflow:tensorflow-lite-support:0.4.4] /Users/danielkinyua/.gradle/caches/8.13/transforms/4e9546c7b44b1df9ae61fec54b767e5b/transformed/tensorflow-lite-support-0.4.4/AndroidManifest.xml Warning:
+	Namespace 'org.tensorflow.lite.support' is used in multiple modules and/or libraries: org.tensorflow:tensorflow-lite-support:0.4.4, org.tensorflow:tensorflow-lite-support-api:0.4.4. Please ensure that all modules and libraries have a unique namespace. For more information, See https://developer.android.com/studio/build/configure-app-module#set-namespace
+
+> Task :app:processDebugManifest
+> Task :core:data:mergeDebugShaders
+> Task :core:data:compileDebugShaders NO-SOURCE
+> Task :core:data:generateDebugAssets UP-TO-DATE
+> Task :core:data:packageDebugAssets
+> Task :app:mergeDebugAssets
+> Task :app:compressDebugAssets
+> Task :app:desugarDebugFileDependencies
+> Task :app:mergeDebugJniLibFolders
+> Task :core:common:mergeDebugJniLibFolders
+> Task :core:common:mergeDebugNativeLibs NO-SOURCE
+> Task :core:common:copyDebugJniLibsProjectOnly
+> Task :core:data:mergeDebugJniLibFolders
+> Task :core:data:mergeDebugNativeLibs NO-SOURCE
+> Task :core:data:copyDebugJniLibsProjectOnly
+> Task :app:validateSigningDebug
+> Task :app:checkDebugDuplicateClasses
+> Task :app:writeDebugAppMetadata
+> Task :app:writeDebugSigningConfigVersions
+> Task :core:common:stripDebugDebugSymbols NO-SOURCE
+> Task :core:common:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :core:common:prepareDebugArtProfile UP-TO-DATE
+> Task :core:common:prepareLintJarForPublish UP-TO-DATE
+> Task :core:common:copyDebugJniLibsProjectAndLocalJars
+> Task :core:data:stripDebugDebugSymbols NO-SOURCE
+> Task :core:data:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :core:data:prepareDebugArtProfile UP-TO-DATE
+> Task :core:data:prepareLintJarForPublish UP-TO-DATE
+> Task :core:data:copyDebugJniLibsProjectAndLocalJars
+> Task :app:processDebugManifestForPackage
+> Task :app:mergeDebugNativeLibs
+
+> Task :app:stripDebugDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so, libdatastore_shared_counter.so, libtensorflowlite_jni.so.
+
+> Task :app:processDebugResources
+> Task :core:common:kspDebugKotlin
+> Task :core:common:compileDebugKotlin
+> Task :core:common:compileDebugJavaWithJavac
+> Task :core:common:processDebugJavaRes
+> Task :core:common:extractDebugAnnotations
+> Task :core:common:transformDebugClassesWithAsm
+> Task :core:common:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :core:common:mergeDebugConsumerProguardFiles
+> Task :core:common:bundleLibRuntimeToJarDebug
+> Task :core:common:bundleLibCompileToJarDebug
+> Task :core:common:bundleLibRuntimeToDirDebug
+> Task :core:common:mergeDebugJavaResource
+> Task :core:common:syncDebugLibJars
+> Task :core:common:bundleDebugAar
+> Task :core:common:assembleDebug
+
+> Task :core:data:kspDebugKotlin
+w: [ksp] /Users/danielkinyua/Downloads/projects/mentra/core/data/src/main/java/com/example/mentra/core/data/local/MentraDatabase.kt:42: Schema export directory was not provided to the annotation processor so Room cannot export the schema. You can either provide `room.schemaLocation` annotation processor argument by applying the Room Gradle plugin (id 'androidx.room') OR set exportSchema to false.
+
+> Task :core:data:compileDebugKotlin
+> Task :app:mergeExtDexDebug
+> Task :core:data:compileDebugJavaWithJavac
+> Task :core:data:processDebugJavaRes
+> Task :core:data:extractDebugAnnotations
+> Task :core:data:mergeDebugJavaResource
+> Task :core:data:transformDebugClassesWithAsm
+> Task :core:data:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :core:data:mergeDebugConsumerProguardFiles
+> Task :core:data:bundleLibRuntimeToJarDebug
+> Task :core:data:bundleLibCompileToJarDebug
+> Task :core:data:syncDebugLibJars
+> Task :core:data:bundleLibRuntimeToDirDebug
+> Task :core:data:bundleDebugAar
+> Task :core:data:assembleDebug
+> Task :app:mergeLibDexDebug
+> Task :app:kspDebugKotlin
+
+> Task :app:compileDebugKotlin FAILED
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:93:32 Overload resolution ambiguity between candidates:
+data class LocationRequest : Any
+class LocationRequest : AbstractSafeParcelable, ReflectedParcelable
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:93:50 Unresolved reference 'LocationRequest'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:103:21 Unresolved reference 'interval'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:104:11 Cannot infer type for this parameter. Please specify it explicitly.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:104:11 Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
+fun <T> T.apply(block: T.() -> Unit): T
+    [R|Contract description]
+     <
+        CallsInPlace(block, EXACTLY_ONCE)
+    >
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:104:17 Cannot infer type for this parameter. Please specify it explicitly.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:105:13 Unresolved reference 'setMinUpdateIntervalMillis'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:105:48 Unresolved reference 'fastestInterval'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:106:13 Unresolved reference 'setMinUpdateDistanceMeters'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:106:48 Unresolved reference 'smallestDisplacement'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:107:13 Unresolved reference 'setPriority'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:107:45 Unresolved reference 'priority'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/location/LocationServices.kt:108:11 Unresolved reference 'build'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/sensors/SensorWrappers.kt:170:21 No parameter with name 'activityType' found.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/sensors/SensorWrappers.kt:171:21 No value passed for parameter 'type'.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/sensors/SensorWrappers.kt:171:34 Argument type mismatch: actual type is 'kotlin.Int', but 'kotlin.Float' was expected.
+e: file:///Users/danielkinyua/Downloads/projects/mentra/app/src/main/java/com/example/mentra/infrastructure/sensors/models/SensorModels.kt:115:47 Unresolved reference 'pow'.
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 14s
+96 actionable tasks: 88 executed, 8 up-to-date

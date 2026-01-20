@@ -3,15 +3,21 @@ package com.example.mentra.dialer
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.CallLog
 import android.provider.ContactsContract
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
@@ -22,6 +28,7 @@ import javax.inject.Singleton
  * Call Log Manager
  *
  * Handles reading and managing call history with complete integrity.
+ * Monitors call log changes in REALTIME via ContentObserver.
  *
  * Required metadata per entry:
  * - Call direction (incoming / outgoing / missed)
@@ -34,6 +41,7 @@ import javax.inject.Singleton
 class CallLogManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _callHistory = MutableStateFlow<List<CallLogEntry>>(emptyList())
     val callHistory: StateFlow<List<CallLogEntry>> = _callHistory.asStateFlow()
@@ -41,12 +49,75 @@ class CallLogManager @Inject constructor(
     private val _recentCalls = MutableStateFlow<List<CallLogEntry>>(emptyList())
     val recentCalls: StateFlow<List<CallLogEntry>> = _recentCalls.asStateFlow()
 
+    // ContentObserver for realtime call log updates
+    private var callLogObserver: ContentObserver? = null
+    private var isObserving = false
+
+    init {
+        // Start observing call log changes immediately
+        startObservingCallLog()
+    }
+
+    /**
+     * Start observing call log changes for realtime updates
+     */
+    fun startObservingCallLog() {
+        if (isObserving) return
+        if (!hasCallLogPermission()) return
+
+        callLogObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                super.onChange(selfChange)
+                // Reload call history when any change is detected
+                scope.launch {
+                    loadCallHistory()
+                }
+            }
+
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                super.onChange(selfChange, uri)
+                // Reload call history when any change is detected
+                scope.launch {
+                    loadCallHistory()
+                }
+            }
+        }
+
+        try {
+            context.contentResolver.registerContentObserver(
+                CallLog.Calls.CONTENT_URI,
+                true, // notifyForDescendants - observe all changes
+                callLogObserver!!
+            )
+            isObserving = true
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Stop observing call log changes
+     */
+    fun stopObservingCallLog() {
+        callLogObserver?.let {
+            try {
+                context.contentResolver.unregisterContentObserver(it)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        callLogObserver = null
+        isObserving = false
+    }
+
     /**
      * Load call history from system
+     * Fetches ALL call logs without any limit - REALTIME
      */
-    suspend fun loadCallHistory(limit: Int = 100) = withContext(Dispatchers.IO) {
+    suspend fun loadCallHistory() = withContext(Dispatchers.IO) {
         if (!hasCallLogPermission()) {
             _callHistory.value = emptyList()
+            _recentCalls.value = emptyList()
             return@withContext
         }
 
@@ -66,12 +137,13 @@ class CallLogManager @Inject constructor(
 
             val sortOrder = "${CallLog.Calls.DATE} DESC"
 
+            // Query ALL call logs - no selection, no limit
             context.contentResolver.query(
                 CallLog.Calls.CONTENT_URI,
                 projection,
-                null,
-                null,
-                "$sortOrder LIMIT $limit"
+                null,  // No selection - get ALL
+                null,  // No selection args
+                sortOrder  // Just sort by date, no LIMIT
             )?.use { cursor ->
                 val idIndex = cursor.getColumnIndexOrThrow(CallLog.Calls._ID)
                 val numberIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
@@ -82,6 +154,7 @@ class CallLogManager @Inject constructor(
                 val photoIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.CACHED_PHOTO_URI)
                 val accountIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.PHONE_ACCOUNT_ID)
 
+                // Load ALL entries
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idIndex)
                     val number = cursor.getString(numberIndex) ?: ""
@@ -91,6 +164,9 @@ class CallLogManager @Inject constructor(
                     val duration = cursor.getLong(durationIndex)
                     val photoUri = cursor.getString(photoIndex)
                     val accountId = cursor.getString(accountIndex)
+
+                    // Detect call source (WhatsApp, Telegram, etc.)
+                    val callSource = CallSource.fromAccountId(accountId)
 
                     entries.add(
                         CallLogEntry(
@@ -102,18 +178,21 @@ class CallLogManager @Inject constructor(
                             duration = duration,
                             photoUri = photoUri,
                             simId = accountId,
-                            isNew = type == CallLog.Calls.MISSED_TYPE
+                            isNew = type == CallLog.Calls.MISSED_TYPE,
+                            callSource = callSource
                         )
                     )
                 }
             }
 
+            // Update both flows with ALL entries
             _callHistory.value = entries
-            _recentCalls.value = entries.take(20)
+            _recentCalls.value = entries  // Same as callHistory - ALL logs
 
         } catch (e: Exception) {
             e.printStackTrace()
             _callHistory.value = emptyList()
+            _recentCalls.value = emptyList()
         }
     }
 
@@ -261,7 +340,8 @@ data class CallLogEntry(
     val duration: Long, // in seconds
     val photoUri: String?,
     val simId: String?,
-    val isNew: Boolean = false
+    val isNew: Boolean = false,
+    val callSource: CallSource = CallSource.PHONE // Identifies if call is from WhatsApp, Telegram, etc.
 ) {
     fun getFormattedDuration(): String {
         if (duration == 0L) return "0:00"
@@ -291,6 +371,66 @@ data class CallLogEntry(
     }
 
     fun getDisplayName(): String = contactName ?: number
+
+    /**
+     * Check if this call was made via a social/VoIP app
+     */
+    fun isSocialCall(): Boolean = callSource != CallSource.PHONE && callSource != CallSource.UNKNOWN
+
+    /**
+     * Get display label for the call source
+     */
+    fun getSourceLabel(): String = callSource.displayName
+}
+
+/**
+ * Call source - identifies the app that made the call
+ */
+enum class CallSource(val displayName: String, val packageHints: List<String>) {
+    PHONE("Phone", listOf()),
+    WHATSAPP("WhatsApp", listOf("whatsapp", "com.whatsapp")),
+    TELEGRAM("Telegram", listOf("telegram", "org.telegram")),
+    FACEBOOK("Messenger", listOf("facebook", "com.facebook.orca", "com.facebook.mlite")),
+    VIBER("Viber", listOf("viber", "com.viber")),
+    SIGNAL("Signal", listOf("signal", "org.thoughtcrime.securesms")),
+    SKYPE("Skype", listOf("skype", "com.skype")),
+    DISCORD("Discord", listOf("discord", "com.discord")),
+    ZOOM("Zoom", listOf("zoom", "us.zoom")),
+    GOOGLE_DUO("Google Duo", listOf("duo", "com.google.android.apps.tachyon")),
+    GOOGLE_MEET("Google Meet", listOf("meet", "com.google.android.apps.meetings")),
+    LINE("LINE", listOf("line", "jp.naver.line")),
+    WECHAT("WeChat", listOf("wechat", "com.tencent.mm")),
+    IMO("imo", listOf("imo", "com.imo")),
+    BOTIM("BOTIM", listOf("botim", "com.algocian.botim")),
+    TRUECALLER("Truecaller", listOf("truecaller", "com.truecaller")),
+    UNKNOWN("Unknown", listOf());
+
+    companion object {
+        /**
+         * Detect call source from phone account ID
+         */
+        fun fromAccountId(accountId: String?): CallSource {
+            if (accountId.isNullOrBlank()) return PHONE
+
+            val lowerAccountId = accountId.lowercase()
+
+            // Check each source's package hints
+            for (source in entries) {
+                if (source.packageHints.any { hint -> lowerAccountId.contains(hint) }) {
+                    return source
+                }
+            }
+
+            // If account ID contains known VoIP indicators but not matched above
+            if (lowerAccountId.contains("voip") ||
+                lowerAccountId.contains("sip") ||
+                lowerAccountId.contains("call")) {
+                return UNKNOWN
+            }
+
+            return PHONE
+        }
+    }
 }
 
 enum class CallType {

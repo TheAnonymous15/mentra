@@ -205,3 +205,23 @@ data class ExecutionOptions(
     val dryRun: Boolean = false
 )
 
+/**
+ * Shell output for display in the terminal
+ */
+data class ShellOutput(
+    val text: String,
+    val type: ShellOutputType = ShellOutputType.INFO,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+/**
+ * Types of shell output
+ */
+enum class ShellOutputType {
+    SUCCESS,     // Green - successful operation
+    ERROR,       // Red - error message
+    WARNING,     // Yellow - warning message
+    INFO,        // White/Gray - information
+    PROMPT,      // Cyan - user prompt
+    COMMAND      // Blue - command echo
+}

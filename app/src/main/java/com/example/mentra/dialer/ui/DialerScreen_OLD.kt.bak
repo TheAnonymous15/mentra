@@ -1,0 +1,3350 @@
+package com.example.mentra.dialer.ui
+
+import android.content.Context
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.*
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.mentra.dialer.*
+import com.example.mentra.dialer.ussd.UssdResponseModal
+import com.example.mentra.dialer.ussd.UssdState
+
+/**
+ * ═══════════════════════════════════════════════════════════════════
+ * NEXUS DIALER V2 - ULTRA FUTURISTIC PHONE INTERFACE
+ * Stunning glassmorphism with compact design and bottom navigation
+ * ═══════════════════════════════════════════════════════════════════
+ */
+
+// Enhanced color palette
+private object NexusDialerColors {
+    val background = Color(0xFF030508)
+    val surface = Color(0xFF080C14)
+    val card = Color(0xFF0C1220)
+    val cardGlass = Color(0xFF141C2D)
+
+    val primary = Color(0xFF00E5FF)      // Electric Cyan
+    val secondary = Color(0xFF9D4EDD)    // Vivid Purple
+    val accent = Color(0xFFFF6090)       // Pink
+    val success = Color(0xFF00E676)      // Neon Green
+
+    val textPrimary = Color(0xFFFFFFFF)
+    val textSecondary = Color(0xFFB0BEC5)
+    val textMuted = Color(0xFF607D8B)
+
+    val callGreen = Color(0xFF00E676)
+    val callRed = Color(0xFFFF5252)
+    val simBlue = Color(0xFF448AFF)
+    val simPurple = Color(0xFFB388FF)
+
+    val gradientPrimary = listOf(Color(0xFF00E5FF), Color(0xFF00B8D4))
+    val gradientCall = listOf(Color(0xFF00E676), Color(0xFF00C853))
+    val gradientGlass = listOf(
+        Color(0xFF1A2332).copy(alpha = 0.85f),
+        Color(0xFF0D1520).copy(alpha = 0.7f)
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DialerScreen(
+    viewModel: DialerViewModel = hiltViewModel(),
+    initialNumber: String? = null,
+    onNavigateToInCall: () -> Unit = {},
+    onBackPressed: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val dialerInput by viewModel.dialerInput.collectAsState()
+    val selectedTab by viewModel.selectedTab.collectAsState()
+    val availableSims by viewModel.availableSims.collectAsState()
+    val selectedSimSlot by viewModel.selectedSimSlot.collectAsState()
+    val recentCalls by viewModel.recentCalls.collectAsState()
+    val callState by viewModel.callState.collectAsState()
+    val contactMatch by viewModel.contactMatch.collectAsState()
+    val isDefaultDialer by viewModel.isDefaultDialer.collectAsState()
+
+    // Call filter and search state
+    val callTypeFilter by viewModel.callTypeFilter.collectAsState()
+    val recentsSearchQuery by viewModel.recentsSearchQuery.collectAsState()
+
+    // USSD state
+    val ussdState by viewModel.ussdState.collectAsState()
+
+    // SIM selection modal state
+    var showSimModal by remember { mutableStateOf(false) }
+    var pendingCallNumber by remember { mutableStateOf("") }
+
+    // Quick messaging modal state
+    var showQuickMessageModal by remember { mutableStateOf(false) }
+
+    // Keypad visibility state
+    var isKeypadVisible by remember { mutableStateOf(true) }
+    var quickMessageRecipient by remember { mutableStateOf("") }
+    var quickMessageRecipientName by remember { mutableStateOf<String?>(null) }
+
+    // Filtered contacts/calls based on keypad input
+    var filteredContacts by remember { mutableStateOf<List<DialerContact>>(emptyList()) }
+    var filteredCalls by remember { mutableStateOf<List<CallLogEntry>>(emptyList()) }
+
+    // Load contacts for filtering
+    var allContacts by remember { mutableStateOf<List<DialerContact>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        allContacts = loadDialerContacts(context)
+    }
+
+    // Filter contacts and calls based on input
+    LaunchedEffect(dialerInput, allContacts, recentCalls) {
+        if (dialerInput.length >= 2) {
+            filteredContacts = allContacts.filter {
+                it.phoneNumber.contains(dialerInput) ||
+                it.name.contains(dialerInput, ignoreCase = true)
+            }.take(5)
+            filteredCalls = recentCalls.filter {
+                it.number.contains(dialerInput) ||
+                it.contactName?.contains(dialerInput, ignoreCase = true) == true
+            }.take(3)
+        } else {
+            filteredContacts = emptyList()
+            filteredCalls = emptyList()
+        }
+    }
+
+    LaunchedEffect(initialNumber) {
+        if (!initialNumber.isNullOrBlank()) {
+            viewModel.setInput(initialNumber)
+        }
+    }
+
+    LaunchedEffect(callState) {
+        if (callState == CallState.DIALING || callState == CallState.ACTIVE || callState == CallState.RINGING) {
+            onNavigateToInCall()
+        }
+    }
+
+    // USSD Response Modal
+    if (ussdState !is UssdState.Idle) {
+        UssdResponseModal(
+            ussdState = ussdState,
+            onDismiss = {
+                viewModel.resetUssdState()
+                viewModel.clearInput() // Clear keypad after USSD
+            },
+            onReply = { reply ->
+                // Send reply to interactive USSD session
+                viewModel.sendUssdReply(reply)
+            },
+            onRetry = {
+                // On retry, try using system dialer as fallback
+                val ussdCode = dialerInput
+                if (ussdCode.isNotBlank() && viewModel.isUssdCode(ussdCode)) {
+                    // Use system dialer
+                    try {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_CALL).apply {
+                            data = android.net.Uri.parse("tel:${android.net.Uri.encode(ussdCode)}")
+                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(intent)
+                        viewModel.resetUssdState()
+                    } catch (e: Exception) {
+                        // If that fails too, just retry with our method
+                        viewModel.executeUssd()
+                    }
+                } else {
+                    viewModel.executeUssd()
+                }
+            }
+        )
+    }
+
+    // SIM Selection Modal
+    if (showSimModal && availableSims.size > 1) {
+        SimSelectionModal(
+            sims = availableSims,
+            phoneNumber = pendingCallNumber,
+            onSimSelected = { simSlot ->
+                viewModel.selectSim(simSlot)
+                // Check if it's a USSD code or regular call
+                if (viewModel.isUssdCode(pendingCallNumber)) {
+                    viewModel.executeUssd(pendingCallNumber)
+                } else {
+                    viewModel.placeCallToNumber(pendingCallNumber)
+                }
+                showSimModal = false
+                pendingCallNumber = ""
+            },
+            onDismiss = {
+                showSimModal = false
+                pendingCallNumber = ""
+            }
+        )
+    }
+
+    // Quick Message Modal
+    if (showQuickMessageModal) {
+        QuickMessageModal(
+            recipientNumber = quickMessageRecipient,
+            recipientName = quickMessageRecipientName,
+            availableSims = availableSims,
+            onSend = { message, simSlot ->
+                // Send message via messaging service
+                viewModel.sendQuickMessage(quickMessageRecipient, message, simSlot)
+                showQuickMessageModal = false
+                quickMessageRecipient = ""
+                quickMessageRecipientName = null
+            },
+            onDismiss = {
+                showQuickMessageModal = false
+                quickMessageRecipient = ""
+                quickMessageRecipientName = null
+            }
+        )
+    }
+
+    // Animated background
+    val infiniteTransition = rememberInfiniteTransition(label = "bg")
+    val glowOffset by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(6000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(NexusDialerColors.background)
+            .drawBehind {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            NexusDialerColors.primary.copy(alpha = 0.12f),
+                            Color.Transparent
+                        ),
+                        center = Offset(size.width * 0.8f, size.height * 0.15f),
+                        radius = size.width * 0.6f
+                    )
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            NexusDialerColors.secondary.copy(alpha = 0.08f),
+                            Color.Transparent
+                        ),
+                        center = Offset(size.width * 0.2f, size.height * 0.85f),
+                        radius = size.width * 0.5f
+                    )
+                )
+            }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            // Main content
+            Box(modifier = Modifier.weight(1f)) {
+                when (selectedTab) {
+                    DialerTab.KEYPAD -> {
+                        KeypadContent(
+                            input = dialerInput,
+                            contactMatch = contactMatch,
+                            filteredContacts = filteredContacts,
+                            filteredCalls = filteredCalls,
+                            allCallLogs = recentCalls,  // All call logs from ViewModel - realtime
+                            isKeypadVisible = isKeypadVisible,
+                            isDefaultDialer = isDefaultDialer,
+                            onDigitPressed = { viewModel.appendDigit(it) },
+                            onDeletePressed = { viewModel.deleteLastDigit() },
+                            onDeleteLongPressed = { viewModel.clearInput() },
+                            onCallPressed = {
+                                if (dialerInput.isNotBlank()) {
+                                    // Check if it's a USSD code
+                                    if (viewModel.isUssdCode(dialerInput)) {
+                                        // Show SIM selection for USSD if multiple SIMs
+                                        if (availableSims.size > 1) {
+                                            pendingCallNumber = dialerInput
+                                            showSimModal = true
+                                        } else {
+                                            viewModel.executeUssd(dialerInput)
+                                        }
+                                    } else if (availableSims.size > 1) {
+                                        // Always show SIM selection popup for multi-SIM
+                                        pendingCallNumber = dialerInput
+                                        showSimModal = true
+                                    } else {
+                                        viewModel.placeCall()
+                                    }
+                                }
+                            },
+                            onContactSelected = { contact ->
+                                viewModel.setInput(contact.phoneNumber)
+                            },
+                            onCallLogSelected = { entry ->
+                                viewModel.setInput(entry.number)
+                            }
+                        )
+                    }
+                    DialerTab.RECENTS -> {
+                        RecentsContent(
+                            recentCalls = recentCalls,
+                            availableSims = availableSims,
+                            callTypeFilter = callTypeFilter,
+                            searchQuery = recentsSearchQuery,
+                            onCallTypeFilterChange = { viewModel.setCallTypeFilter(it) },
+                            onSearchQueryChange = { viewModel.setRecentsSearchQuery(it) },
+                            onCallClick = { entry ->
+                                if (availableSims.size > 1) {
+                                    pendingCallNumber = entry.number
+                                    showSimModal = true
+                                } else {
+                                    viewModel.placeCallToNumber(entry.number)
+                                }
+                            },
+                            onMessageClick = { entry ->
+                                quickMessageRecipient = entry.number
+                                quickMessageRecipientName = entry.contactName
+                                showQuickMessageModal = true
+                            }
+                        )
+                    }
+                    DialerTab.CONTACTS -> {
+                        ContactsContent(
+                            onContactClick = { number ->
+                                viewModel.setInput(number)
+                                viewModel.selectTab(DialerTab.KEYPAD)
+                            },
+                            onMessageClick = { contact ->
+                                quickMessageRecipient = contact.phoneNumber
+                                quickMessageRecipientName = contact.name
+                                showQuickMessageModal = true
+                            }
+                        )
+                    }
+                    DialerTab.FAVORITES -> {
+                        FavoritesContent()
+                    }
+                    DialerTab.CALL -> {
+                        // CALL tab is handled by the center button, show keypad content
+                        KeypadContent(
+                            input = dialerInput,
+                            contactMatch = contactMatch,
+                            filteredContacts = filteredContacts,
+                            filteredCalls = filteredCalls,
+                            allCallLogs = recentCalls,  // All call logs from ViewModel - realtime
+                            isKeypadVisible = isKeypadVisible,
+                            isDefaultDialer = isDefaultDialer,
+                            onDigitPressed = { viewModel.appendDigit(it) },
+                            onDeletePressed = { viewModel.deleteLastDigit() },
+                            onDeleteLongPressed = { viewModel.clearInput() },
+                            onCallPressed = {
+                                if (dialerInput.isNotBlank()) {
+                                    if (viewModel.isUssdCode(dialerInput)) {
+                                        if (availableSims.size > 1) {
+                                            pendingCallNumber = dialerInput
+                                            showSimModal = true
+                                        } else {
+                                            viewModel.executeUssd(dialerInput)
+                                        }
+                                    } else if (availableSims.size > 1) {
+                                        pendingCallNumber = dialerInput
+                                        showSimModal = true
+                                    } else {
+                                        viewModel.placeCall()
+                                    }
+                                }
+                            },
+                            onContactSelected = { contact ->
+                                viewModel.setInput(contact.phoneNumber)
+                            },
+                            onCallLogSelected = { entry ->
+                                viewModel.setInput(entry.number)
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Bottom Navigation
+            BottomNavBar(
+                selectedTab = selectedTab,
+                onTabSelected = { tab ->
+                    if (tab == DialerTab.KEYPAD && selectedTab == DialerTab.KEYPAD) {
+                        // Toggle keypad visibility if already on keypad tab
+                        isKeypadVisible = !isKeypadVisible
+                    } else if (tab != DialerTab.CALL) {
+                        viewModel.selectTab(tab)
+                        if (tab == DialerTab.KEYPAD) {
+                            isKeypadVisible = true // Show keypad when switching to keypad tab
+                        }
+                    }
+                },
+                missedCallCount = viewModel.getMissedCallCount(),
+                dialerInput = dialerInput,
+                onCallPressed = {
+                    if (dialerInput.isNotBlank()) {
+                        // Check if it's a USSD code
+                        if (viewModel.isUssdCode(dialerInput)) {
+                            // Show SIM selection for USSD if multiple SIMs
+                            if (availableSims.size > 1) {
+                                pendingCallNumber = dialerInput
+                                showSimModal = true
+                            } else {
+                                viewModel.executeUssd(dialerInput)
+                            }
+                        } else if (availableSims.size > 1) {
+                            // Always show SIM selection popup for multi-SIM
+                            pendingCallNumber = dialerInput
+                            showSimModal = true
+                        } else {
+                            viewModel.placeCall()
+                        }
+                    }
+                }
+            )
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SIM SELECTION MODAL
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun SimSelectionModal(
+    sims: List<SimAccount>,
+    phoneNumber: String,
+    onSimSelected: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.75f))
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .padding(32.dp)
+                    .widthIn(max = 300.dp)
+                    .clickable(enabled = false) { },
+                shape = RoundedCornerShape(24.dp),
+                color = NexusDialerColors.cardGlass,
+                border = BorderStroke(
+                    1.dp,
+                    Brush.linearGradient(
+                        listOf(
+                            NexusDialerColors.primary.copy(alpha = 0.4f),
+                            NexusDialerColors.secondary.copy(alpha = 0.2f)
+                        )
+                    )
+                ),
+                shadowElevation = 24.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Header icon
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .background(
+                                brush = Brush.linearGradient(NexusDialerColors.gradientPrimary),
+                                shape = CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.SimCard,
+                            contentDescription = null,
+                            tint = NexusDialerColors.background,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+
+                    Text(
+                        text = "Select SIM",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = NexusDialerColors.textPrimary
+                    )
+
+                    Text(
+                        text = phoneNumber,
+                        fontSize = 15.sp,
+                        color = NexusDialerColors.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // SIM options
+                    sims.forEachIndexed { index, sim ->
+                        val simColor = if (index == 0) NexusDialerColors.simBlue else NexusDialerColors.simPurple
+
+                        Surface(
+                            onClick = { onSimSelected(sim.slotIndex) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            color = simColor.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, simColor.copy(alpha = 0.35f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .background(simColor.copy(alpha = 0.2f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "${index + 1}",
+                                        color = simColor,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = sim.getLabel().ifEmpty { "SIM ${index + 1}" },
+                                        color = NexusDialerColors.textPrimary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = sim.carrierName.ifEmpty { "Carrier" },
+                                        color = NexusDialerColors.textMuted,
+                                        fontSize = 12.sp
+                                    )
+                                }
+
+                                Icon(
+                                    Icons.Default.Call,
+                                    contentDescription = null,
+                                    tint = simColor,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = NexusDialerColors.textMuted, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BOTTOM NAVIGATION BAR
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun BottomNavBar(
+    selectedTab: DialerTab,
+    onTabSelected: (DialerTab) -> Unit,
+    missedCallCount: Int,
+    dialerInput: String = "",
+    onCallPressed: () -> Unit = {}
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        shape = RoundedCornerShape(22.dp),
+        color = NexusDialerColors.cardGlass.copy(alpha = 0.92f),
+        border = BorderStroke(
+            1.dp,
+            Brush.linearGradient(
+                listOf(
+                    NexusDialerColors.primary.copy(alpha = 0.25f),
+                    NexusDialerColors.secondary.copy(alpha = 0.15f)
+                )
+            )
+        ),
+        shadowElevation = 12.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Order: Keypad | Contacts | Call (center) | Recents | Favorites
+            NavItem(
+                tab = DialerTab.KEYPAD,
+                isSelected = selectedTab == DialerTab.KEYPAD,
+                badgeCount = 0,
+                onClick = { onTabSelected(DialerTab.KEYPAD) }
+            )
+
+            NavItem(
+                tab = DialerTab.CONTACTS,
+                isSelected = selectedTab == DialerTab.CONTACTS,
+                badgeCount = 0,
+                onClick = { onTabSelected(DialerTab.CONTACTS) }
+            )
+
+            // Center 3D Call Button
+            CenterCallButton(
+                hasInput = dialerInput.isNotBlank(),
+                onClick = onCallPressed
+            )
+
+            NavItem(
+                tab = DialerTab.RECENTS,
+                isSelected = selectedTab == DialerTab.RECENTS,
+                badgeCount = missedCallCount,
+                onClick = { onTabSelected(DialerTab.RECENTS) }
+            )
+
+            NavItem(
+                tab = DialerTab.FAVORITES,
+                isSelected = selectedTab == DialerTab.FAVORITES,
+                badgeCount = 0,
+                onClick = { onTabSelected(DialerTab.FAVORITES) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CenterCallButton(
+    hasInput: Boolean,
+    onClick: () -> Unit
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "call_glow")
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = EaseInOut),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow_alpha"
+    )
+
+    val scale by animateFloatAsState(
+        targetValue = if (hasInput) 1.1f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "scale"
+    )
+
+    val haptic = LocalHapticFeedback.current
+
+    Box(
+        modifier = Modifier
+            .size(60.dp)
+            .offset(y = (-8).dp) // Float above other nav items
+            .scale(scale)
+            .drawBehind {
+                // 3D shadow/glow effect
+                if (hasInput) {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                NexusDialerColors.callGreen.copy(alpha = glowAlpha),
+                                Color.Transparent
+                            )
+                        ),
+                        radius = size.minDimension * 0.7f
+                    )
+                }
+            }
+            .clip(CircleShape)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = if (hasInput) {
+                        listOf(
+                            NexusDialerColors.callGreen,
+                            NexusDialerColors.callGreen.copy(alpha = 0.7f)
+                        )
+                    } else {
+                        listOf(
+                            NexusDialerColors.callGreen.copy(alpha = 0.6f),
+                            NexusDialerColors.callGreen.copy(alpha = 0.4f)
+                        )
+                    }
+                )
+            )
+            // 3D inner shadow effect
+            .drawWithContent {
+                drawContent()
+                // Top highlight
+                drawCircle(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.3f),
+                            Color.Transparent
+                        ),
+                        startY = 0f,
+                        endY = size.height * 0.4f
+                    ),
+                    radius = size.minDimension * 0.48f
+                )
+                // Bottom shadow
+                drawCircle(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.3f)
+                        ),
+                        startY = size.height * 0.6f,
+                        endY = size.height
+                    ),
+                    radius = size.minDimension * 0.48f
+                )
+            }
+            .border(
+                width = 2.dp,
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.4f),
+                        NexusDialerColors.callGreen.copy(alpha = 0.2f)
+                    )
+                ),
+                shape = CircleShape
+            )
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.Phone,
+            contentDescription = "Call",
+            tint = Color.White,
+            modifier = Modifier.size(28.dp)
+        )
+    }
+}
+
+@Composable
+private fun NavItem(
+    tab: DialerTab,
+    isSelected: Boolean,
+    badgeCount: Int,
+    onClick: () -> Unit
+) {
+    // Skip CALL tab - it's handled by CenterCallButton
+    if (tab == DialerTab.CALL) return
+
+    val icon = when (tab) {
+        DialerTab.KEYPAD -> Icons.Default.Dialpad
+        DialerTab.RECENTS -> Icons.Default.History
+        DialerTab.CONTACTS -> Icons.Default.People
+        DialerTab.FAVORITES -> Icons.Default.Star
+        DialerTab.CALL -> Icons.Default.Phone
+    }
+
+    val label = when (tab) {
+        DialerTab.KEYPAD -> "Keypad"
+        DialerTab.RECENTS -> "Recents"
+        DialerTab.CONTACTS -> "Contacts"
+        DialerTab.FAVORITES -> "Favorites"
+        DialerTab.CALL -> "Call"
+    }
+
+    val scale by animateFloatAsState(
+        targetValue = if (isSelected) 1.08f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "scale"
+    )
+
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .scale(scale),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        BadgedBox(
+            badge = {
+                if (badgeCount > 0) {
+                    Badge(
+                        containerColor = NexusDialerColors.accent,
+                        contentColor = Color.White
+                    ) {
+                        Text(if (badgeCount > 9) "9+" else badgeCount.toString(), fontSize = 9.sp)
+                    }
+                }
+            }
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(
+                        if (isSelected) NexusDialerColors.primary.copy(alpha = 0.12f) else Color.Transparent,
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = label,
+                    tint = if (isSelected) NexusDialerColors.primary else NexusDialerColors.textMuted,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+            color = if (isSelected) NexusDialerColors.primary else NexusDialerColors.textMuted
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// KEYPAD CONTENT - Compact & Stunning with Contact Filtering
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun KeypadContent(
+    input: String,
+    contactMatch: ContactMatch?,
+    filteredContacts: List<DialerContact>,
+    filteredCalls: List<CallLogEntry>,
+    allCallLogs: List<CallLogEntry>,  // All call logs from ViewModel for realtime updates
+    isKeypadVisible: Boolean,
+    isDefaultDialer: Boolean,
+    onDigitPressed: (String) -> Unit,
+    onDeletePressed: () -> Unit,
+    onDeleteLongPressed: () -> Unit,
+    onCallPressed: () -> Unit,
+    onContactSelected: (DialerContact) -> Unit,
+    onCallLogSelected: (CallLogEntry) -> Unit
+) {
+    // Determine what to show in suggestions
+    val showFiltered = input.length >= 2 && (filteredContacts.isNotEmpty() || filteredCalls.isNotEmpty())
+
+    val showAllLogs = !isKeypadVisible && allCallLogs.isNotEmpty()
+    val showRecentCalls = isKeypadVisible && input.isEmpty() && allCallLogs.isNotEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+    ) {
+        // Adaptive Suggestions Panel - fills from number display to top (slightly below edge)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(top = 16.dp), // Space from top edge
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showFiltered || showRecentCalls || showAllLogs,
+                enter = fadeIn(animationSpec = tween(200)) + scaleIn(initialScale = 0.9f),
+                exit = fadeOut(animationSpec = tween(150)) + scaleOut(targetScale = 0.9f)
+            ) {
+                GlassmorphicSuggestionsPanel(
+                    filteredContacts = if (showFiltered) filteredContacts else emptyList(),
+                    filteredCalls = if (showFiltered) filteredCalls else emptyList(),
+                    recentCalls = allCallLogs, // Show all call logs, panel handles display limits
+                    showRecentCalls = showRecentCalls || showAllLogs,
+                    showAllLogs = showAllLogs,
+                    isDefaultDialer = isDefaultDialer,
+                    onContactSelected = onContactSelected,
+                    onCallLogSelected = onCallLogSelected
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Keypad with slide animation - includes input box
+        AnimatedVisibility(
+            visible = isKeypadVisible,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 })
+        ) {
+            // Nice card enclosure for keypad with input box
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                color = NexusDialerColors.card.copy(alpha = 0.4f),
+                border = BorderStroke(
+                    1.dp,
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            NexusDialerColors.primary.copy(alpha = 0.2f),
+                            NexusDialerColors.secondary.copy(alpha = 0.1f),
+                            Color.Transparent
+                        )
+                    )
+                ),
+                shadowElevation = 8.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    // Number Display inside the card
+                    NumberDisplay(
+                        input = input,
+                        contactMatch = contactMatch,
+                        onDeletePressed = onDeletePressed,
+                        onDeleteLongPressed = onDeleteLongPressed
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Keypad
+                    CompactKeypad(onDigitPressed = onDigitPressed)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GLASSMORPHIC SUGGESTIONS PANEL
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun GlassmorphicSuggestionsPanel(
+    filteredContacts: List<DialerContact>,
+    filteredCalls: List<CallLogEntry>,
+    recentCalls: List<CallLogEntry>,
+    showRecentCalls: Boolean,
+    showAllLogs: Boolean = false,
+    isDefaultDialer: Boolean = false,
+    onContactSelected: (DialerContact) -> Unit,
+    onCallLogSelected: (CallLogEntry) -> Unit
+) {
+    val context = LocalContext.current
+    var searchQuery by remember { mutableStateOf("") }
+    var showSearchModal by remember { mutableStateOf(false) }
+    var allContacts by remember { mutableStateOf<List<DialerContact>>(emptyList()) }
+
+    // Load contacts for search
+    LaunchedEffect(Unit) {
+        allContacts = loadDialerContacts(context)
+    }
+
+    // Show all calls - no limit
+    val displayCalls = if (showRecentCalls) recentCalls else filteredCalls
+    val hasContent = filteredContacts.isNotEmpty() || displayCalls.isNotEmpty()
+
+    if (!hasContent) return
+
+    // Alien Search Modal
+    if (showSearchModal) {
+        AlienSearchModal(
+            allCallLogs = recentCalls,
+            allContacts = allContacts,
+            onCallLogSelected = { entry ->
+                showSearchModal = false
+                onCallLogSelected(entry)
+            },
+            onContactSelected = { contact ->
+                showSearchModal = false
+                onContactSelected(contact)
+            },
+            onDismiss = { showSearchModal = false }
+        )
+    }
+
+    // Fill available space adaptively
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .fillMaxHeight()  // Fill all available vertical space
+            .padding(bottom = 4.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = Color.Transparent
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            NexusDialerColors.cardGlass.copy(alpha = 0.8f),
+                            NexusDialerColors.card.copy(alpha = 0.9f)
+                        )
+                    ),
+                    shape = RoundedCornerShape(20.dp)
+                )
+                .border(
+                    width = 1.dp,
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            NexusDialerColors.primary.copy(alpha = 0.5f),
+                            NexusDialerColors.secondary.copy(alpha = 0.3f),
+                            NexusDialerColors.primary.copy(alpha = 0.15f)
+                        )
+                    ),
+                    shape = RoundedCornerShape(20.dp)
+                )
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                // Header with search button and default dialer status
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(NexusDialerColors.primary, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (showRecentCalls) "CALL HISTORY" else "SUGGESTIONS",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = NexusDialerColors.primary,
+                            letterSpacing = 1.2.sp
+                        )
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Search button - stunning alien style
+                        Surface(
+                            onClick = { showSearchModal = true },
+                            shape = RoundedCornerShape(10.dp),
+                            color = NexusDialerColors.secondary.copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, NexusDialerColors.secondary.copy(alpha = 0.3f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = NexusDialerColors.secondary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "SEARCH",
+                                    fontSize = 9.sp,
+                                    color = NexusDialerColors.secondary,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                        }
+
+                        // Default dialer status badge
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isDefaultDialer)
+                                NexusDialerColors.success.copy(alpha = 0.15f)
+                            else
+                                NexusDialerColors.callRed.copy(alpha = 0.15f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(5.dp)
+                                        .background(
+                                            if (isDefaultDialer) NexusDialerColors.success else NexusDialerColors.callRed,
+                                            CircleShape
+                                        )
+                                )
+                                Text(
+                                    text = if (isDefaultDialer) "DEFAULT" else "NOT DEFAULT",
+                                    fontSize = 8.sp,
+                                    color = if (isDefaultDialer) NexusDialerColors.success else NexusDialerColors.callRed,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                        }
+
+                        // Count badge
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = NexusDialerColors.primary.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = "${displayCalls.size}",
+                                fontSize = 10.sp,
+                                color = NexusDialerColors.primary,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Scrollable list
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Contacts first (limit to 3 when filtering)
+                    items(filteredContacts.take(3)) { contact ->
+                        GlassSuggestionContactItem(
+                            contact = contact,
+                            onClick = { onContactSelected(contact) }
+                        )
+                    }
+
+                    // Call logs - show all when in recent calls mode
+                    items(displayCalls) { entry ->
+                        GlassSuggestionCallItem(
+                            entry = entry,
+                            onClick = { onCallLogSelected(entry) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlassSuggestionContactItem(
+    contact: DialerContact,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = NexusDialerColors.surface.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(0.5.dp, NexusDialerColors.primary.copy(alpha = 0.25f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Avatar with gradient
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .background(
+                        brush = Brush.linearGradient(
+                            colors = listOf(NexusDialerColors.primary, NexusDialerColors.secondary)
+                        ),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = contact.name.firstOrNull()?.uppercase()?.toString() ?: "#",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = contact.name,
+                    color = NexusDialerColors.textPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = contact.phoneNumber,
+                    color = NexusDialerColors.textMuted,
+                    fontSize = 11.sp
+                )
+            }
+
+            // Contact indicator
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .background(NexusDialerColors.primary.copy(alpha = 0.12f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Person,
+                    contentDescription = null,
+                    tint = NexusDialerColors.primary,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlassSuggestionCallItem(
+    entry: CallLogEntry,
+    onClick: () -> Unit
+) {
+    val typeColor = when (entry.callType) {
+        CallType.MISSED -> NexusDialerColors.accent
+        CallType.OUTGOING -> NexusDialerColors.primary
+        else -> NexusDialerColors.success
+    }
+
+    val typeIcon = when (entry.callType) {
+        CallType.INCOMING -> Icons.Default.CallReceived
+        CallType.OUTGOING -> Icons.Default.CallMade
+        CallType.MISSED -> Icons.Default.CallMissed
+        else -> Icons.Default.Call
+    }
+
+    Surface(
+        onClick = onClick,
+        color = NexusDialerColors.surface.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Call type indicator
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .background(typeColor.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    typeIcon,
+                    contentDescription = null,
+                    tint = typeColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = entry.contactName ?: entry.number,
+                    color = NexusDialerColors.textPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = entry.getFormattedDate(),
+                    color = NexusDialerColors.textMuted,
+                    fontSize = 11.sp
+                )
+            }
+
+            // Call button
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .background(NexusDialerColors.callGreen.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Call,
+                    contentDescription = "Call",
+                    tint = NexusDialerColors.callGreen,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+        }
+    }
+}
+
+// Helper to load recent calls for suggestions
+private suspend fun loadRecentCallsForSuggestions(context: Context): List<CallLogEntry> =
+    loadCallLogsWithLimit(context, 5)
+
+// Helper to load all call logs
+private suspend fun loadAllCallLogs(context: Context): List<CallLogEntry> =
+    loadCallLogsWithLimit(context, -1) // -1 means no limit
+
+private suspend fun loadCallLogsWithLimit(context: Context, limit: Int): List<CallLogEntry> =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val calls = mutableListOf<CallLogEntry>()
+
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.READ_CALL_LOG
+        ) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return@withContext emptyList()
+        }
+
+        try {
+            val projection = arrayOf(
+                android.provider.CallLog.Calls._ID,
+                android.provider.CallLog.Calls.NUMBER,
+                android.provider.CallLog.Calls.CACHED_NAME,
+                android.provider.CallLog.Calls.TYPE,
+                android.provider.CallLog.Calls.DATE,
+                android.provider.CallLog.Calls.DURATION
+            )
+
+            context.contentResolver.query(
+                android.provider.CallLog.Calls.CONTENT_URI,
+                projection,
+                null,
+                null,
+                "${android.provider.CallLog.Calls.DATE} DESC"
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(android.provider.CallLog.Calls._ID)
+                val numberIndex = cursor.getColumnIndexOrThrow(android.provider.CallLog.Calls.NUMBER)
+                val nameIndex = cursor.getColumnIndexOrThrow(android.provider.CallLog.Calls.CACHED_NAME)
+                val typeIndex = cursor.getColumnIndexOrThrow(android.provider.CallLog.Calls.TYPE)
+                val dateIndex = cursor.getColumnIndexOrThrow(android.provider.CallLog.Calls.DATE)
+                val durationIndex = cursor.getColumnIndexOrThrow(android.provider.CallLog.Calls.DURATION)
+
+                var count = 0
+                while (cursor.moveToNext() && (limit == -1 || count < limit)) {
+                    val callType = when (cursor.getInt(typeIndex)) {
+                        android.provider.CallLog.Calls.INCOMING_TYPE -> CallType.INCOMING
+                        android.provider.CallLog.Calls.OUTGOING_TYPE -> CallType.OUTGOING
+                        android.provider.CallLog.Calls.MISSED_TYPE -> CallType.MISSED
+                        else -> CallType.UNKNOWN
+                    }
+
+                    calls.add(
+                        CallLogEntry(
+                            id = cursor.getLong(idIndex),
+                            number = cursor.getString(numberIndex) ?: "",
+                            contactName = cursor.getString(nameIndex),
+                            callType = callType,
+                            timestamp = cursor.getLong(dateIndex),
+                            duration = cursor.getLong(durationIndex),
+                            photoUri = null,
+                            simId = null
+                        )
+                    )
+                    count++
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        calls
+    }
+
+// Keep old FilteredContactItem and FilteredCallLogItem for backwards compatibility
+@Composable
+private fun FilteredContactItem(
+    contact: DialerContact,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = NexusDialerColors.cardGlass,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .background(
+                        brush = Brush.linearGradient(NexusDialerColors.gradientPrimary),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = contact.name.firstOrNull()?.uppercase()?.toString() ?: "#",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(contact.name, color = NexusDialerColors.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(contact.phoneNumber, color = NexusDialerColors.textMuted, fontSize = 11.sp)
+            }
+            Icon(Icons.Default.Person, null, tint = NexusDialerColors.primary, modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun FilteredCallLogItem(
+    entry: CallLogEntry,
+    onClick: () -> Unit
+) {
+    val typeColor = when (entry.callType) {
+        CallType.MISSED -> NexusDialerColors.accent
+        CallType.OUTGOING -> NexusDialerColors.primary
+        else -> NexusDialerColors.success
+    }
+
+    Surface(
+        onClick = onClick,
+        color = NexusDialerColors.cardGlass,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .background(typeColor.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.History, null, tint = typeColor, modifier = Modifier.size(16.dp))
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = entry.contactName ?: entry.number,
+                    color = NexusDialerColors.textPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(entry.getFormattedDate(), color = NexusDialerColors.textMuted, fontSize = 11.sp)
+            }
+            Icon(Icons.Default.Call, null, tint = typeColor, modifier = Modifier.size(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun NumberDisplay(
+    input: String,
+    contactMatch: ContactMatch?,
+    onDeletePressed: () -> Unit,
+    onDeleteLongPressed: () -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
+        ) {
+            // Spacer to balance the backspace button on the right
+            Spacer(modifier = Modifier.width(44.dp))
+
+            // Number text
+            Text(
+                text = if (input.isEmpty()) "Enter number" else formatPhoneNumber(input),
+                fontSize = when {
+                    input.length > 14 -> 22.sp
+                    input.length > 10 -> 26.sp
+                    else -> 32.sp
+                },
+                fontWeight = FontWeight.Light,
+                color = if (input.isEmpty()) NexusDialerColors.textMuted else NexusDialerColors.textPrimary,
+                textAlign = TextAlign.Center,
+                letterSpacing = 2.sp,
+                modifier = Modifier.weight(1f)
+            )
+
+            // Persistent backspace button on the right
+            Box(
+                modifier = Modifier.width(44.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (input.isNotEmpty()) {
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onDeletePressed()
+                        },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onDeleteLongPressed()
+                                    }
+                                )
+                            }
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Backspace,
+                            contentDescription = "Delete (Long press to clear all)",
+                            tint = NexusDialerColors.textMuted,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = contactMatch != null,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            contactMatch?.let {
+                Text(
+                    text = it.name,
+                    fontSize = 13.sp,
+                    color = NexusDialerColors.primary,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactKeypad(onDigitPressed: (String) -> Unit) {
+    val keys = listOf(
+        listOf("1" to "", "2" to "ABC", "3" to "DEF"),
+        listOf("4" to "GHI", "5" to "JKL", "6" to "MNO"),
+        listOf("7" to "PQRS", "8" to "TUV", "9" to "WXYZ"),
+        listOf("*" to "", "0" to "+", "#" to "")
+    )
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        keys.forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                row.forEach { (digit, letters) ->
+                    DialButton(
+                        digit = digit,
+                        letters = letters,
+                        onClick = { onDigitPressed(digit) },
+                        onLongClick = if (digit == "0") {{ onDigitPressed("+") }} else null
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DialButton(
+    digit: String,
+    letters: String,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
+) {
+    val haptic = LocalHapticFeedback.current
+    var isPressed by remember { mutableStateOf(false) }
+
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.9f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioHighBouncy),
+        label = "btnScale"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(68.dp)
+            .scale(scale)
+            .clip(CircleShape)
+            .background(
+                if (isPressed) NexusDialerColors.primary.copy(alpha = 0.1f)
+                else Color.Transparent
+            )
+            .pointerInput(digit) {
+                detectTapGestures(
+                    onPress = {
+                        isPressed = true
+                        tryAwaitRelease()
+                        isPressed = false
+                    },
+                    onTap = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onClick()
+                    },
+                    onLongPress = onLongClick?.let { callback ->
+                        {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            callback()
+                        }
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = digit,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Light,
+                color = NexusDialerColors.textPrimary
+            )
+            if (letters.isNotEmpty()) {
+                Text(
+                    text = letters,
+                    fontSize = 8.sp,
+                    color = NexusDialerColors.textMuted,
+                    letterSpacing = 0.5.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CallButton(
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    var isPressed by remember { mutableStateOf(false) }
+
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.92f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "callBtnScale"
+    )
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
+    ) {
+        // Outer glow layer for more 3D effect
+        Box(
+            modifier = Modifier
+                .size(if (enabled) 72.dp else 60.dp)
+                .scale(scale)
+                .background(
+                    if (enabled) {
+                        Brush.radialGradient(
+                            colors = listOf(
+                                NexusDialerColors.callGreen.copy(alpha = 0.3f),
+                                Color.Transparent
+                            )
+                        )
+                    } else {
+                        Brush.radialGradient(
+                            colors = listOf(
+                                NexusDialerColors.textMuted.copy(alpha = 0.1f),
+                                Color.Transparent
+                            )
+                        )
+                    },
+                    shape = CircleShape
+                )
+        )
+
+        // Main button with enhanced 3D effects
+        Box(
+            modifier = Modifier
+                .size(60.dp)
+                .scale(scale)
+                .shadow(
+                    elevation = if (enabled) 20.dp else 4.dp,
+                    shape = CircleShape,
+                    spotColor = if (enabled) NexusDialerColors.callGreen.copy(alpha = 0.5f) else Color.Transparent,
+                    ambientColor = if (enabled) NexusDialerColors.callGreen.copy(alpha = 0.3f) else Color.Transparent
+                )
+                .clip(CircleShape)
+                .background(
+                    if (enabled) {
+                        Brush.linearGradient(
+                            colors = listOf(
+                                NexusDialerColors.callGreen.copy(alpha = 1.1f),
+                                NexusDialerColors.callGreen.copy(alpha = 0.9f)
+                            ),
+                            start = Offset(0f, 0f),
+                            end = Offset(100f, 100f)
+                        )
+                    } else {
+                        Brush.linearGradient(
+                            colors = listOf(
+                                NexusDialerColors.textMuted.copy(alpha = 0.25f),
+                                NexusDialerColors.textMuted.copy(alpha = 0.15f)
+                            )
+                        )
+                    }
+                )
+                .border(
+                    width = if (enabled) 2.dp else 1.dp,
+                    brush = if (enabled) {
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.4f),
+                                NexusDialerColors.callGreen.copy(alpha = 0.6f),
+                                Color.Black.copy(alpha = 0.2f)
+                            ),
+                            start = Offset(0f, 0f),
+                            end = Offset(100f, 100f)
+                        )
+                    } else {
+                        Brush.linearGradient(
+                            colors = listOf(
+                                NexusDialerColors.textMuted.copy(alpha = 0.2f),
+                                NexusDialerColors.textMuted.copy(alpha = 0.1f)
+                            )
+                        )
+                    },
+                    shape = CircleShape
+                )
+                .pointerInput(enabled) {
+                    detectTapGestures(
+                        onPress = {
+                            if (enabled) {
+                                isPressed = true
+                                tryAwaitRelease()
+                                isPressed = false
+                            }
+                        },
+                        onTap = {
+                            if (enabled) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onClick()
+                            }
+                        }
+                    )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            // Inner highlight for 3D depth
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .background(
+                        if (enabled) {
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.25f),
+                                    Color.Transparent
+                                ),
+                                center = Offset(25f, 25f),
+                                radius = 40f
+                            )
+                        } else {
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.05f),
+                                    Color.Transparent
+                                )
+                            )
+                        },
+                        shape = CircleShape
+                    )
+            )
+
+            Icon(
+                Icons.Default.Call,
+                contentDescription = "Call",
+                tint = if (enabled) Color.White else NexusDialerColors.textMuted,
+                modifier = Modifier.size(26.dp)
+            )
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// RECENTS CONTENT - With Filter Tabs, Search, and Message Button
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun RecentsContent(
+    recentCalls: List<CallLogEntry>,
+    availableSims: List<SimAccount>,
+    callTypeFilter: CallTypeFilter,
+    searchQuery: String,
+    onCallTypeFilterChange: (CallTypeFilter) -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onCallClick: (CallLogEntry) -> Unit,
+    onMessageClick: (CallLogEntry) -> Unit
+) {
+    // Apply filters - show ALL call logs, no pagination limits
+    val filteredCalls = remember(recentCalls, callTypeFilter, searchQuery) {
+        recentCalls
+            .filter { entry ->
+                // Apply call type filter
+                when (callTypeFilter) {
+                    CallTypeFilter.ALL -> true
+                    CallTypeFilter.INCOMING -> entry.callType == CallType.INCOMING
+                    CallTypeFilter.OUTGOING -> entry.callType == CallType.OUTGOING
+                    CallTypeFilter.MISSED -> entry.callType == CallType.MISSED
+                    CallTypeFilter.BLOCKED -> entry.callType == CallType.BLOCKED || entry.callType == CallType.REJECTED
+                }
+            }
+            .filter { entry ->
+                // Apply search filter
+                if (searchQuery.isEmpty()) {
+                    true
+                } else {
+                    val query = searchQuery.lowercase()
+                    entry.contactName?.lowercase()?.contains(query) == true ||
+                    entry.number.contains(query)
+                }
+            }
+            .sortedByDescending { it.timestamp }
+    }
+
+    if (recentCalls.isEmpty()) {
+        EmptyState(
+            icon = Icons.Default.History,
+            title = "No recent calls",
+            subtitle = "Call history appears here"
+        )
+    } else {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Search bar
+            RecentsSearchBar(
+                searchQuery = searchQuery,
+                onSearchQueryChange = onSearchQueryChange
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Filter tabs
+            CallTypeFilterTabs(
+                selectedFilter = callTypeFilter,
+                onFilterSelected = onCallTypeFilterChange
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Total count indicator
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Total: ${filteredCalls.size} calls",
+                    color = NexusDialerColors.textMuted,
+                    fontSize = 12.sp
+                )
+                Text(
+                    text = "All: ${recentCalls.size}",
+                    color = NexusDialerColors.primary.copy(alpha = 0.7f),
+                    fontSize = 11.sp
+                )
+            }
+
+            // Empty state for filtered results
+            if (filteredCalls.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.SearchOff,
+                            contentDescription = null,
+                            tint = NexusDialerColors.textMuted,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "No calls found",
+                            color = NexusDialerColors.textMuted,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            } else {
+                // Call list - ALL calls, no pagination, smooth scrolling
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Show ALL call entries - no pagination
+                    items(
+                        items = filteredCalls,
+                        key = { it.id }  // Use id as key for better performance
+                    ) { entry ->
+                        RecentCallItem(
+                            entry = entry,
+                            onCallClick = { onCallClick(entry) },
+                            onMessageClick = { onMessageClick(entry) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Search bar for recents
+@Composable
+private fun RecentsSearchBar(
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 12.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = NexusDialerColors.card,
+        border = BorderStroke(1.dp, NexusDialerColors.primary.copy(alpha = 0.2f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Search,
+                contentDescription = "Search",
+                tint = NexusDialerColors.primary,
+                modifier = Modifier.size(20.dp)
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            BasicTextField(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                modifier = Modifier.weight(1f),
+                textStyle = LocalTextStyle.current.copy(
+                    color = NexusDialerColors.textPrimary,
+                    fontSize = 14.sp
+                ),
+                decorationBox = { innerTextField ->
+                    if (searchQuery.isEmpty()) {
+                        Text(
+                            text = "Search calls...",
+                            color = NexusDialerColors.textMuted,
+                            fontSize = 14.sp
+                        )
+                    }
+                    innerTextField()
+                },
+                singleLine = true
+            )
+
+            if (searchQuery.isNotEmpty()) {
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(
+                    onClick = { onSearchQueryChange("") },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Clear",
+                        tint = NexusDialerColors.textMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// Call type filter tabs
+@Composable
+private fun CallTypeFilterTabs(
+    selectedFilter: CallTypeFilter,
+    onFilterSelected: (CallTypeFilter) -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = NexusDialerColors.card.copy(alpha = 0.6f),
+        border = BorderStroke(1.dp, NexusDialerColors.primary.copy(alpha = 0.15f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            CallTypeFilter.entries.forEach { filter ->
+                CallTypeFilterChip(
+                    filter = filter,
+                    isSelected = selectedFilter == filter,
+                    onClick = { onFilterSelected(filter) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.CallTypeFilterChip(
+    filter: CallTypeFilter,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val label = when (filter) {
+        CallTypeFilter.ALL -> "All"
+        CallTypeFilter.INCOMING -> "In"
+        CallTypeFilter.OUTGOING -> "Out"
+        CallTypeFilter.MISSED -> "Missed"
+        CallTypeFilter.BLOCKED -> "Blocked"
+    }
+
+    val icon = when (filter) {
+        CallTypeFilter.ALL -> Icons.Default.CallEnd
+        CallTypeFilter.INCOMING -> Icons.AutoMirrored.Filled.CallReceived
+        CallTypeFilter.OUTGOING -> Icons.AutoMirrored.Filled.CallMade
+        CallTypeFilter.MISSED -> Icons.AutoMirrored.Filled.CallMissed
+        CallTypeFilter.BLOCKED -> Icons.Default.Block
+    }
+
+    val color = when (filter) {
+        CallTypeFilter.ALL -> NexusDialerColors.primary
+        CallTypeFilter.INCOMING -> NexusDialerColors.success
+        CallTypeFilter.OUTGOING -> NexusDialerColors.secondary
+        CallTypeFilter.MISSED -> NexusDialerColors.accent
+        CallTypeFilter.BLOCKED -> NexusDialerColors.callRed
+    }
+
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.weight(1f),
+        shape = RoundedCornerShape(10.dp),
+        color = if (isSelected) color.copy(alpha = 0.15f) else Color.Transparent
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = if (isSelected) color else NexusDialerColors.textMuted,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = label,
+                color = if (isSelected) color else NexusDialerColors.textMuted,
+                fontSize = 10.sp,
+                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
+            )
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// RECENT CALL ITEM WITH MESSAGE BUTTON
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun RecentCallItem(
+    entry: CallLogEntry,
+    onCallClick: () -> Unit,
+    onMessageClick: () -> Unit
+) {
+    val typeColor = when (entry.callType) {
+        CallType.MISSED -> NexusDialerColors.accent
+        CallType.OUTGOING -> NexusDialerColors.primary
+        else -> NexusDialerColors.success
+    }
+
+    val typeIcon = when (entry.callType) {
+        CallType.INCOMING -> Icons.Default.CallReceived
+        CallType.OUTGOING -> Icons.Default.CallMade
+        CallType.MISSED -> Icons.Default.CallMissed
+        else -> Icons.Default.Call
+    }
+
+    Surface(
+        onClick = onCallClick,
+        color = NexusDialerColors.card.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Contact avatar
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(typeColor.copy(alpha = 0.1f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = entry.contactName?.firstOrNull()?.uppercase() ?: "#",
+                    color = typeColor,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // Contact info
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = entry.contactName ?: entry.number,
+                    color = NexusDialerColors.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                // Show number if we have a contact name
+                if (entry.contactName != null) {
+                    Text(
+                        text = entry.number,
+                        color = NexusDialerColors.textMuted,
+                        fontSize = 11.sp
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(typeIcon, null, tint = typeColor, modifier = Modifier.size(12.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(entry.getFormattedDate(), color = NexusDialerColors.textMuted, fontSize = 11.sp)
+                    if (entry.duration > 0) {
+                        Text(" • ${formatDuration(entry.duration)}", color = NexusDialerColors.textMuted, fontSize = 11.sp)
+                    }
+                }
+            }
+
+            // Action buttons
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Message button
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(NexusDialerColors.secondary.copy(alpha = 0.12f), CircleShape)
+                        .clickable(onClick = onMessageClick),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Message, null, tint = NexusDialerColors.secondary, modifier = Modifier.size(16.dp))
+                }
+
+                // Call button
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(NexusDialerColors.callGreen.copy(alpha = 0.12f), CircleShape)
+                        .clickable(onClick = onCallClick),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Call, null, tint = NexusDialerColors.callGreen, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+    }
+}
+
+private fun formatDuration(seconds: Long): String {
+    val mins = seconds / 60
+    val secs = seconds % 60
+    return if (mins > 0) "${mins}m ${secs}s" else "${secs}s"
+}
+
+// Keep old CallLogItem for backwards compatibility
+@Composable
+private fun CallLogItem(entry: CallLogEntry, onClick: () -> Unit) {
+    RecentCallItem(entry = entry, onCallClick = onClick, onMessageClick = {})
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CONTACTS CONTENT - With Message Button
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun ContactsContent(
+    onContactClick: (String) -> Unit,
+    onMessageClick: (DialerContact) -> Unit
+) {
+    val context = LocalContext.current
+    var contacts by remember { mutableStateOf<List<DialerContact>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        isLoading = true
+        contacts = loadDialerContacts(context)
+        isLoading = false
+    }
+
+    val filteredContacts = remember(contacts, searchQuery) {
+        if (searchQuery.isBlank()) contacts
+        else contacts.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+            it.phoneNumber.contains(searchQuery)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+    ) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search contacts", color = NexusDialerColors.textMuted, fontSize = 14.sp) },
+            leadingIcon = {
+                Icon(Icons.Default.Search, null, tint = NexusDialerColors.textMuted, modifier = Modifier.size(18.dp))
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = NexusDialerColors.primary,
+                unfocusedBorderColor = NexusDialerColors.textMuted.copy(alpha = 0.2f),
+                focusedTextColor = NexusDialerColors.textPrimary,
+                unfocusedTextColor = NexusDialerColors.textPrimary,
+                cursorColor = NexusDialerColors.primary,
+                focusedContainerColor = NexusDialerColors.card.copy(alpha = 0.3f),
+                unfocusedContainerColor = NexusDialerColors.card.copy(alpha = 0.2f)
+            ),
+            shape = RoundedCornerShape(14.dp),
+            singleLine = true
+        )
+
+        when {
+            isLoading -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = NexusDialerColors.primary, strokeWidth = 2.dp, modifier = Modifier.size(32.dp))
+                }
+            }
+            filteredContacts.isEmpty() -> {
+                EmptyState(
+                    icon = Icons.Default.People,
+                    title = if (searchQuery.isNotBlank()) "No results" else "No contacts",
+                    subtitle = if (searchQuery.isNotBlank()) "Try different keywords" else "Add contacts to your phone"
+                )
+            }
+            else -> {
+                LazyColumn(
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(filteredContacts) { contact ->
+                        ContactItemWithMessage(
+                            contact = contact,
+                            onCallClick = { onContactClick(contact.phoneNumber) },
+                            onMessageClick = { onMessageClick(contact) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContactItemWithMessage(
+    contact: DialerContact,
+    onCallClick: () -> Unit,
+    onMessageClick: () -> Unit
+) {
+    Surface(
+        onClick = onCallClick,
+        color = NexusDialerColors.card.copy(alpha = 0.4f),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        brush = Brush.linearGradient(listOf(NexusDialerColors.primary, NexusDialerColors.secondary)),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = contact.name.firstOrNull()?.uppercase()?.toString() ?: "#",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(contact.name, color = NexusDialerColors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(contact.phoneNumber, color = NexusDialerColors.textMuted, fontSize = 12.sp)
+            }
+
+            // Action buttons
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Message button
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(NexusDialerColors.secondary.copy(alpha = 0.12f), CircleShape)
+                        .clickable(onClick = onMessageClick),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Message, null, tint = NexusDialerColors.secondary, modifier = Modifier.size(14.dp))
+                }
+
+                // Call button
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(NexusDialerColors.callGreen.copy(alpha = 0.12f), CircleShape)
+                        .clickable(onClick = onCallClick),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Call, null, tint = NexusDialerColors.callGreen, modifier = Modifier.size(14.dp))
+                }
+            }
+        }
+    }
+}
+
+// Keep old ContactItem for backwards compatibility
+@Composable
+private fun ContactItem(contact: DialerContact, onClick: () -> Unit) {
+    ContactItemWithMessage(contact = contact, onCallClick = onClick, onMessageClick = {})
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FAVORITES CONTENT
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun FavoritesContent() {
+    EmptyState(
+        icon = Icons.Default.Star,
+        title = "No favorites",
+        subtitle = "Star contacts for quick access"
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EMPTY STATE
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun EmptyState(icon: ImageVector, title: String, subtitle: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .background(NexusDialerColors.card, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, null, tint = NexusDialerColors.textMuted, modifier = Modifier.size(26.dp))
+            }
+            Text(title, color = NexusDialerColors.textSecondary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(subtitle, color = NexusDialerColors.textMuted, fontSize = 12.sp)
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DATA CLASSES & HELPERS
+// ═══════════════════════════════════════════════════════════════════
+
+data class DialerContact(
+    val id: Long,
+    val name: String,
+    val phoneNumber: String,
+    val photoUri: String? = null
+)
+
+private suspend fun loadDialerContacts(context: Context): List<DialerContact> =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val contacts = mutableListOf<DialerContact>()
+
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.READ_CONTACTS
+        ) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return@withContext emptyList()
+        }
+
+        try {
+            val projection = arrayOf(
+                android.provider.ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER,
+                android.provider.ContactsContract.CommonDataKinds.Phone.PHOTO_URI
+            )
+
+            context.contentResolver.query(
+                android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                projection,
+                null,
+                null,
+                "${android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC"
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(android.provider.ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+                val nameIndex = cursor.getColumnIndexOrThrow(android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                val numberIndex = cursor.getColumnIndexOrThrow(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
+                val photoIndex = cursor.getColumnIndexOrThrow(android.provider.ContactsContract.CommonDataKinds.Phone.PHOTO_URI)
+
+                val seen = mutableSetOf<String>()
+                while (cursor.moveToNext()) {
+                    val number = cursor.getString(numberIndex)?.replace(Regex("[\\s\\-()]"), "") ?: continue
+                    if (number in seen) continue
+                    seen.add(number)
+
+                    contacts.add(
+                        DialerContact(
+                            id = cursor.getLong(idIndex),
+                            name = cursor.getString(nameIndex) ?: "Unknown",
+                            phoneNumber = number,
+                            photoUri = cursor.getString(photoIndex)
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        contacts
+    }
+
+private fun formatPhoneNumber(input: String): String {
+    // Don't format phone numbers - display as entered for better UX
+    return input
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// QUICK MESSAGE MODAL - Send SMS without opening messaging app
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun QuickMessageModal(
+    recipientNumber: String,
+    recipientName: String?,
+    availableSims: List<SimAccount>,
+    onSend: (message: String, simSlot: Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var messageText by remember { mutableStateOf("") }
+    var selectedSimSlot by remember { mutableIntStateOf(if (availableSims.isNotEmpty()) availableSims[0].slotIndex else 0) }
+    var isSending by remember { mutableStateOf(false) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.7f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .padding(16.dp),
+                shape = RoundedCornerShape(24.dp),
+                color = NexusDialerColors.cardGlass,
+                border = BorderStroke(
+                    1.dp,
+                    Brush.linearGradient(
+                        listOf(
+                            NexusDialerColors.secondary.copy(alpha = 0.5f),
+                            NexusDialerColors.primary.copy(alpha = 0.3f)
+                        )
+                    )
+                ),
+                shadowElevation = 24.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .background(
+                                        brush = Brush.linearGradient(
+                                            listOf(NexusDialerColors.secondary, NexusDialerColors.primary)
+                                        ),
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Message,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+
+                            Column {
+                                Text(
+                                    text = "Quick Message",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = NexusDialerColors.textPrimary
+                                )
+                                Text(
+                                    text = recipientName ?: recipientNumber,
+                                    fontSize = 12.sp,
+                                    color = NexusDialerColors.primary
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(NexusDialerColors.card, CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = NexusDialerColors.textMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    // Recipient info
+                    if (recipientName != null) {
+                        Text(
+                            text = recipientNumber,
+                            fontSize = 13.sp,
+                            color = NexusDialerColors.textMuted
+                        )
+                    }
+
+                    // Message input
+                    OutlinedTextField(
+                        value = messageText,
+                        onValueChange = { messageText = it },
+                        placeholder = { Text("Type your message...", color = NexusDialerColors.textMuted) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 100.dp, max = 150.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = NexusDialerColors.primary,
+                            unfocusedBorderColor = NexusDialerColors.textMuted.copy(alpha = 0.3f),
+                            focusedTextColor = NexusDialerColors.textPrimary,
+                            unfocusedTextColor = NexusDialerColors.textPrimary,
+                            cursorColor = NexusDialerColors.primary,
+                            focusedContainerColor = NexusDialerColors.card.copy(alpha = 0.5f),
+                            unfocusedContainerColor = NexusDialerColors.card.copy(alpha = 0.3f)
+                        ),
+                        shape = RoundedCornerShape(14.dp)
+                    )
+
+                    // Character count
+                    Text(
+                        text = "${messageText.length}/160",
+                        fontSize = 11.sp,
+                        color = if (messageText.length > 160) NexusDialerColors.accent else NexusDialerColors.textMuted,
+                        modifier = Modifier.align(Alignment.End)
+                    )
+
+                    // SIM selection (if multiple SIMs)
+                    if (availableSims.size > 1) {
+                        Text(
+                            text = "Send via:",
+                            fontSize = 12.sp,
+                            color = NexusDialerColors.textSecondary
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            availableSims.forEachIndexed { index, sim ->
+                                val isSelected = sim.slotIndex == selectedSimSlot
+                                val simColor = if (index == 0) NexusDialerColors.simBlue else NexusDialerColors.simPurple
+
+                                Surface(
+                                    onClick = { selectedSimSlot = sim.slotIndex },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isSelected) simColor.copy(alpha = 0.2f) else Color.Transparent,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isSelected) simColor else NexusDialerColors.textMuted.copy(alpha = 0.3f)
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(
+                                                    if (isSelected) simColor else NexusDialerColors.textMuted,
+                                                    CircleShape
+                                                )
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = sim.getLabel().take(12),
+                                            fontSize = 12.sp,
+                                            color = if (isSelected) simColor else NexusDialerColors.textSecondary,
+                                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Send button
+                    Button(
+                        onClick = {
+                            if (messageText.isNotBlank()) {
+                                isSending = true
+                                onSend(messageText, selectedSimSlot)
+                            }
+                        },
+                        enabled = messageText.isNotBlank() && !isSending,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NexusDialerColors.secondary,
+                            disabledContainerColor = NexusDialerColors.textMuted.copy(alpha = 0.3f)
+                        ),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        if (isSending) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Send,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Send Message", fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ALIEN SEARCH MODAL - Super Glassmorphic, Futuristic Search
+// Priority: Call Logs first, then Contacts
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+private fun AlienSearchModal(
+    allCallLogs: List<CallLogEntry>,
+    allContacts: List<DialerContact>,
+    onCallLogSelected: (CallLogEntry) -> Unit,
+    onContactSelected: (DialerContact) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    val haptic = LocalHapticFeedback.current
+
+    // Animated background
+    val infiniteTransition = rememberInfiniteTransition(label = "alienSearch")
+    val glowPulse by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = EaseInOutSine),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glowPulse"
+    )
+
+    val ringRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(15000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ringRotation"
+    )
+
+    // Search results - priority: call logs first, then contacts
+    val searchResults = remember(searchQuery, allCallLogs, allContacts) {
+        if (searchQuery.length < 2) {
+            SearchResults(emptyList(), emptyList())
+        } else {
+            val query = searchQuery.lowercase()
+
+            // Search call logs first (higher priority)
+            val matchingCalls = allCallLogs.filter { entry ->
+                entry.number.contains(query) ||
+                entry.contactName?.lowercase()?.contains(query) == true
+            }.distinctBy { it.number }.take(10)
+
+            // Search contacts (lower priority, only if call logs don't have enough)
+            val matchingContacts = if (matchingCalls.size < 5) {
+                allContacts.filter { contact ->
+                    contact.phoneNumber.contains(query) ||
+                    contact.name.lowercase().contains(query)
+                }.filterNot { contact ->
+                    // Exclude contacts already in call logs
+                    matchingCalls.any { it.number.takeLast(10) == contact.phoneNumber.takeLast(10) }
+                }.take(10 - matchingCalls.size)
+            } else {
+                emptyList()
+            }
+
+            SearchResults(matchingCalls, matchingContacts)
+        }
+    }
+
+    // Auto-focus search field
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100)
+        focusRequester.requestFocus()
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.85f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            // Alien glow effect background
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val centerX = size.width / 2
+                val centerY = size.height / 2.5f
+
+                // Outer rotating ring glow
+                for (i in 1..3) {
+                    drawCircle(
+                        brush = Brush.sweepGradient(
+                            colors = listOf(
+                                Color(0xFF00E5FF).copy(alpha = glowPulse * 0.15f / i),
+                                Color(0xFF7C4DFF).copy(alpha = glowPulse * 0.1f / i),
+                                Color(0xFFFF4081).copy(alpha = glowPulse * 0.05f / i),
+                                Color(0xFF00E5FF).copy(alpha = glowPulse * 0.15f / i)
+                            ),
+                            center = Offset(centerX, centerY)
+                        ),
+                        radius = 200.dp.toPx() + (i * 50.dp.toPx()),
+                        center = Offset(centerX, centerY),
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                }
+            }
+
+            // Main search modal
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .fillMaxHeight(0.7f)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { /* Prevent dismiss */ },
+                shape = RoundedCornerShape(32.dp),
+                color = Color.Transparent
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    Color(0xFF0A1628).copy(alpha = 0.95f),
+                                    Color(0xFF050D18).copy(alpha = 0.98f)
+                                )
+                            ),
+                            shape = RoundedCornerShape(32.dp)
+                        )
+                        .border(
+                            width = 1.5.dp,
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFF00E5FF).copy(alpha = 0.6f),
+                                    Color(0xFF7C4DFF).copy(alpha = 0.4f),
+                                    Color(0xFFFF4081).copy(alpha = 0.3f),
+                                    Color(0xFF00E5FF).copy(alpha = 0.2f)
+                                )
+                            ),
+                            shape = RoundedCornerShape(32.dp)
+                        )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(20.dp)
+                    ) {
+                        // Header with close button
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                // Animated search icon
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .rotate(ringRotation)
+                                        .background(
+                                            brush = Brush.sweepGradient(
+                                                colors = listOf(
+                                                    Color(0xFF00E5FF),
+                                                    Color(0xFF7C4DFF),
+                                                    Color.Transparent,
+                                                    Color(0xFF00E5FF)
+                                                )
+                                            ),
+                                            shape = CircleShape
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .background(Color(0xFF0A1628), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Search,
+                                            contentDescription = null,
+                                            tint = Color(0xFF00E5FF),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+
+                                Text(
+                                    text = "NEXUS SEARCH",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF00E5FF),
+                                    letterSpacing = 3.sp
+                                )
+                            }
+
+                            // Close button
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onDismiss()
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = Color(0xFFFF4081),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        // Alien search input field
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color(0xFF0D1A2D).copy(alpha = 0.8f),
+                            border = BorderStroke(
+                                1.dp,
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0xFF00E5FF).copy(alpha = if (searchQuery.isNotEmpty()) 0.8f else 0.3f),
+                                        Color(0xFF7C4DFF).copy(alpha = if (searchQuery.isNotEmpty()) 0.6f else 0.2f)
+                                    )
+                                )
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = Color(0xFF00E5FF).copy(alpha = 0.7f),
+                                    modifier = Modifier.size(22.dp)
+                                )
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                BasicTextField(
+                                    value = searchQuery,
+                                    onValueChange = { searchQuery = it },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .focusRequester(focusRequester),
+                                    textStyle = LocalTextStyle.current.copy(
+                                        color = Color.White,
+                                        fontSize = 16.sp
+                                    ),
+                                    singleLine = true,
+                                    decorationBox = { innerTextField ->
+                                        if (searchQuery.isEmpty()) {
+                                            Text(
+                                                text = "Search calls & contacts...",
+                                                color = Color(0xFF6B7A99),
+                                                fontSize = 16.sp
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                )
+
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = { searchQuery = "" },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Clear,
+                                            contentDescription = "Clear",
+                                            tint = Color(0xFF6B7A99),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Results info
+                        if (searchQuery.length >= 2) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "RESULTS",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF7C4DFF),
+                                    letterSpacing = 2.sp
+                                )
+                                Text(
+                                    text = "${searchResults.callLogs.size + searchResults.contacts.size} found",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF6B7A99)
+                                )
+                            }
+                        }
+
+                        // Results list
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Call logs section (priority)
+                            if (searchResults.callLogs.isNotEmpty()) {
+                                item {
+                                    Text(
+                                        text = "📞 CALL HISTORY",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF00E5FF),
+                                        letterSpacing = 1.sp,
+                                        modifier = Modifier.padding(vertical = 8.dp)
+                                    )
+                                }
+
+                                items(searchResults.callLogs) { entry ->
+                                    AlienSearchResultItem(
+                                        title = entry.contactName ?: entry.number,
+                                        subtitle = if (entry.contactName != null) entry.number else null,
+                                        callType = entry.callType,
+                                        timestamp = entry.timestamp,
+                                        isCallLog = true,
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onCallLogSelected(entry)
+                                        }
+                                    )
+                                }
+                            }
+
+                            // Contacts section
+                            if (searchResults.contacts.isNotEmpty()) {
+                                item {
+                                    Text(
+                                        text = "👤 CONTACTS",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF7C4DFF),
+                                        letterSpacing = 1.sp,
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 0.dp)
+                                    )
+                                }
+
+                                items(searchResults.contacts) { contact ->
+                                    AlienSearchResultItem(
+                                        title = contact.name,
+                                        subtitle = contact.phoneNumber,
+                                        callType = null,
+                                        timestamp = null,
+                                        isCallLog = false,
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onContactSelected(contact)
+                                        }
+                                    )
+                                }
+                            }
+
+                            // Empty state
+                            if (searchQuery.length >= 2 && searchResults.callLogs.isEmpty() && searchResults.contacts.isEmpty()) {
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 40.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.SearchOff,
+                                                contentDescription = null,
+                                                tint = Color(0xFF6B7A99),
+                                                modifier = Modifier.size(48.dp)
+                                            )
+                                            Text(
+                                                text = "No results found",
+                                                color = Color(0xFF6B7A99),
+                                                fontSize = 14.sp
+                                            )
+                                            Text(
+                                                text = "Try a different search term",
+                                                color = Color(0xFF4A5568),
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Initial state hint
+                            if (searchQuery.length < 2) {
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 40.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Text(
+                                                text = "🔮",
+                                                fontSize = 48.sp
+                                            )
+                                            Text(
+                                                text = "Type to search",
+                                                color = Color(0xFF00E5FF),
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Text(
+                                                text = "Search by name or number\nCall logs are prioritized",
+                                                color = Color(0xFF6B7A99),
+                                                fontSize = 12.sp,
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Search results data class
+private data class SearchResults(
+    val callLogs: List<CallLogEntry>,
+    val contacts: List<DialerContact>
+)
+
+@Composable
+private fun AlienSearchResultItem(
+    title: String,
+    subtitle: String?,
+    callType: CallType?,
+    timestamp: Long?,
+    isCallLog: Boolean,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.98f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "scale"
+    )
+
+    val callTypeIcon = when (callType) {
+        CallType.INCOMING -> Icons.Default.CallReceived
+        CallType.OUTGOING -> Icons.Default.CallMade
+        CallType.MISSED -> Icons.Default.CallMissed
+        else -> null
+    }
+
+    val callTypeColor = when (callType) {
+        CallType.INCOMING -> Color(0xFF00E676)
+        CallType.OUTGOING -> Color(0xFF00E5FF)
+        CallType.MISSED -> Color(0xFFFF5252)
+        else -> Color(0xFF7C4DFF)
+    }
+
+    Surface(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(scale),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFF0D1A2D).copy(alpha = 0.6f),
+        border = BorderStroke(
+            1.dp,
+            if (isCallLog) callTypeColor.copy(alpha = 0.3f) else Color(0xFF7C4DFF).copy(alpha = 0.2f)
+        ),
+        interactionSource = interactionSource
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Avatar/Icon
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(
+                        brush = Brush.linearGradient(
+                            colors = if (isCallLog) {
+                                listOf(callTypeColor.copy(alpha = 0.3f), callTypeColor.copy(alpha = 0.1f))
+                            } else {
+                                listOf(Color(0xFF7C4DFF).copy(alpha = 0.3f), Color(0xFF7C4DFF).copy(alpha = 0.1f))
+                            }
+                        ),
+                        shape = CircleShape
+                    )
+                    .border(
+                        1.dp,
+                        if (isCallLog) callTypeColor.copy(alpha = 0.5f) else Color(0xFF7C4DFF).copy(alpha = 0.3f),
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isCallLog && callTypeIcon != null) {
+                    Icon(
+                        callTypeIcon,
+                        contentDescription = null,
+                        tint = callTypeColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                } else {
+                    Text(
+                        text = title.firstOrNull()?.uppercase()?.toString() ?: "#",
+                        color = Color(0xFF7C4DFF),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            // Content
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        color = Color(0xFF6B7A99),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (timestamp != null) {
+                    Text(
+                        text = formatRelativeTime(timestamp),
+                        color = Color(0xFF4A5568),
+                        fontSize = 10.sp
+                    )
+                }
+            }
+
+            // Action indicator
+            Icon(
+                Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = Color(0xFF4A5568),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+// Helper function to format relative time
+private fun formatRelativeTime(timestamp: Long): String {
+    val now = System.currentTimeMillis()
+    val diff = now - timestamp
+
+    return when {
+        diff < 60_000 -> "Just now"
+        diff < 3_600_000 -> "${diff / 60_000}m ago"
+        diff < 86_400_000 -> "${diff / 3_600_000}h ago"
+        diff < 604_800_000 -> "${diff / 86_400_000}d ago"
+        else -> {
+            val sdf = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+            sdf.format(java.util.Date(timestamp))
+        }
+    }
+}
+
+

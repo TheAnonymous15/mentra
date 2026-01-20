@@ -33,7 +33,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.ui.platform.LocalContext
 import com.example.mentra.messaging.*
+import com.example.mentra.messaging.ui.theme.NexusColors
+import com.example.mentra.dialer.ui.NexusCallModal
+import com.example.mentra.dialer.ui.CallModalData
+import com.example.mentra.dialer.DialerManager
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -41,8 +46,14 @@ import java.util.*
  * ═══════════════════════════════════════════════════════════════════
  * NEXUS CONVERSATION SCREEN
  * Full-Width Stunning Messages with Text Zoom
+ * Background-Sorted, Paginated for Instant View
  * ═══════════════════════════════════════════════════════════════════
  */
+
+// Pagination constants
+private const val INITIAL_PAGE_SIZE = 50  // Load last 50 messages initially
+private const val PAGE_SIZE = 30          // Load 30 more when scrolling up
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversationScreen(
@@ -50,13 +61,40 @@ fun ConversationScreen(
     viewModel: MessagingViewModel = hiltViewModel(),
     onBack: () -> Unit
 ) {
-    val messages by viewModel.messages.collectAsState()
+    val allMessages by viewModel.messages.collectAsState()
     val availableSims by viewModel.availableSims.collectAsState()
     var messageText by remember { mutableStateOf("") }
+
+    // Context for making calls
+    val context = LocalContext.current
+
+    // Call modal state
+    var showCallModal by remember { mutableStateOf(false) }
+
+    // Use reverseLayout - this is the KEY to instant bottom view
+    // Messages are displayed bottom-to-top, so index 0 is at the bottom
     val listState = rememberLazyListState()
 
     // Text zoom state (only affects message text size)
     var textZoom by remember { mutableFloatStateOf(1f) }
+
+    // Pagination state
+    var loadedMessageCount by remember { mutableIntStateOf(INITIAL_PAGE_SIZE) }
+    var isLoadingMore by remember { mutableStateOf(false) }
+
+    // Pre-sorted messages (background sorted, newest LAST in list, but shown at BOTTOM due to reverseLayout)
+    val sortedMessages = remember(allMessages) {
+        allMessages.sortedBy { it.timestamp }
+    }
+
+    // Paginated messages - take the LAST N messages (most recent)
+    val displayedMessages = remember(sortedMessages, loadedMessageCount) {
+        val startIndex = maxOf(0, sortedMessages.size - loadedMessageCount)
+        sortedMessages.subList(startIndex, sortedMessages.size)
+    }
+
+    // Check if there are more messages to load
+    val hasMoreMessages = sortedMessages.size > loadedMessageCount
 
     // Sender analysis
     val senderType = remember(phoneNumber) { SmsSenderAnalyzer.getSenderType(phoneNumber) }
@@ -69,11 +107,32 @@ fun ConversationScreen(
         viewModel.loadConversation(phoneNumber)
     }
 
-    // Auto-scroll to bottom
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    // Load more messages when user scrolls to top (which is actually the end in reverse layout)
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.layoutInfo }
+            .collect { layoutInfo ->
+                val totalItems = layoutInfo.totalItemsCount
+                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+
+                // If user has scrolled to see older messages (near the end of the list in reverse)
+                // and there are more messages to load
+                if (lastVisibleItem >= totalItems - 5 && hasMoreMessages && !isLoadingMore) {
+                    isLoadingMore = true
+                    // Load more messages
+                    loadedMessageCount += PAGE_SIZE
+                    isLoadingMore = false
+                }
+            }
+    }
+
+    // When new message is sent/received, ensure we see it (scroll to bottom = index 0 in reverse)
+    val previousMessageCount = remember { mutableIntStateOf(allMessages.size) }
+    LaunchedEffect(allMessages.size) {
+        if (allMessages.size > previousMessageCount.intValue && allMessages.isNotEmpty()) {
+            // New message arrived - scroll to bottom (index 0 in reverse layout)
+            listState.animateScrollToItem(0)
         }
+        previousMessageCount.intValue = allMessages.size
     }
 
     Box(
@@ -98,7 +157,8 @@ fun ConversationScreen(
                 isUnreplyable = isUnreplyable,
                 currentZoom = textZoom,
                 onZoomReset = { textZoom = 1f },
-                onBack = onBack
+                onBack = onBack,
+                onCallPressed = { showCallModal = true }
             )
 
             // Messages with pinch-to-zoom for TEXT ONLY
@@ -112,25 +172,70 @@ fun ConversationScreen(
                         }
                     }
             ) {
+                // Using reverseLayout so newest messages are at the bottom (index 0)
+                // User starts at bottom and scrolls UP to see older messages
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
+                    reverseLayout = true, // KEY: Start from bottom, scroll up for older
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Group by date
-                    val grouped = groupMessagesByDate(messages)
+                    // Loading indicator at top (shown when scrolling to load more)
+                    if (isLoadingMore) {
+                        item(key = "loading") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = NexusColors.primary,
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                        }
+                    }
+
+                    // "Load more" indicator when there are more messages
+                    if (hasMoreMessages && !isLoadingMore) {
+                        item(key = "load_more") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "↑ Scroll up for older messages",
+                                    color = NexusColors.textMuted,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Messages in REVERSE order (newest first in list = at bottom visually)
+                    // Since reverseLayout is true, we need to reverse our sorted list
+                    val reversedMessages = displayedMessages.reversed()
+
+                    // Group by date for display
+                    val grouped = groupMessagesByDateReversed(reversedMessages)
 
                     grouped.forEach { (date, msgs) ->
-                        item(key = "date_$date") {
-                            DateDivider(date = date)
-                        }
-
+                        // Messages first (they appear above the date due to reverse)
                         items(msgs, key = { it.id }) { message ->
                             FullWidthMessageBubble(
                                 message = message,
                                 textZoom = textZoom
                             )
+                        }
+
+                        // Date divider (appears below messages in this group due to reverse)
+                        item(key = "date_$date") {
+                            DateDivider(date = date)
                         }
                     }
 
@@ -176,6 +281,44 @@ fun ConversationScreen(
                     )
                 }
         }
+    }
+
+    // Call Modal
+    if (showCallModal) {
+        val contactName = allMessages.firstOrNull()?.let {
+            // Try to get contact name from the first message
+            null // This would come from a contact lookup
+        }
+
+        // Convert availableSims to SimInfo list for call modal
+        val simInfoList = availableSims.map { sim ->
+            com.example.mentra.dialer.ui.SimInfo(
+                slotIndex = sim.simSlotIndex,
+                carrierName = sim.carrierName,
+                phoneNumber = sim.phoneNumber
+            )
+        }
+
+        NexusCallModal(
+            data = CallModalData(
+                phoneNumber = phoneNumber,
+                contactName = contactName
+            ),
+            availableSims = simInfoList,
+            onDismiss = { showCallModal = false },
+            onCall = { simSlot ->
+                // Place the call - modal will handle its own state transitions
+                val dialerManager = DialerManager(context)
+                dialerManager.placeCall(phoneNumber, simSlot)
+                // Don't close modal here - it transitions to CALLING state automatically
+            },
+            onEndCall = {
+                // End call and close modal
+                val dialerManager = DialerManager(context)
+                dialerManager.endCall()
+                showCallModal = false
+            }
+        )
     }
 }
 
@@ -250,7 +393,8 @@ fun ConversationHeader(
     isUnreplyable: Boolean,
     currentZoom: Float,
     onZoomReset: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onCallPressed: () -> Unit = {}
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -359,7 +503,7 @@ fun ConversationHeader(
             }
 
             if (!isUnreplyable) {
-                IconButton(onClick = { /* Call */ }) {
+                IconButton(onClick = { onCallPressed() }) {
                     Icon(
                         Icons.Default.Phone,
                         contentDescription = "Call",
@@ -1145,12 +1289,52 @@ private fun groupMessagesByDate(messages: List<SmsMessage>): Map<String, List<Sm
 
     val yesterday = today - 86400_000
 
-    return messages.groupBy { msg ->
+    // First, sort all messages by timestamp ascending (oldest first, newest last/at bottom)
+    val sortedMessages = messages.sortedBy { it.timestamp }
+
+    // Group by date label
+    val grouped = sortedMessages.groupBy { msg ->
         when {
             msg.timestamp >= today -> "Today"
             msg.timestamp >= yesterday -> "Yesterday"
             else -> SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).format(Date(msg.timestamp))
         }
+    }
+
+    // Sort groups by the earliest timestamp in each group (chronological order)
+    return grouped.toSortedMap(compareBy { dateLabel ->
+        grouped[dateLabel]?.firstOrNull()?.timestamp ?: 0L
+    })
+}
+
+/**
+ * Groups messages by date for REVERSE layout display.
+ * Messages within each group are kept in the provided order (already reversed).
+ * Groups are sorted by newest first (for reverse layout - newest at bottom visually).
+ */
+private fun groupMessagesByDateReversed(messages: List<SmsMessage>): List<Pair<String, List<SmsMessage>>> {
+    val today = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    val yesterday = today - 86400_000
+
+    // Group by date label (messages are already in reversed order - newest first)
+    val grouped = messages.groupBy { msg ->
+        when {
+            msg.timestamp >= today -> "Today"
+            msg.timestamp >= yesterday -> "Yesterday"
+            else -> SimpleDateFormat("MMMM d, yyyy", Locale.getDefault()).format(Date(msg.timestamp))
+        }
+    }
+
+    // Sort groups by newest first (for reverse layout)
+    // In reverse layout: first groups in list appear at BOTTOM, so newest should be first
+    return grouped.toList().sortedByDescending { (_, msgs) ->
+        msgs.firstOrNull()?.timestamp ?: 0L
     }
 }
 

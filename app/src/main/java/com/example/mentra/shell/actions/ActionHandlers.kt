@@ -5,8 +5,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
-import android.os.Environment
-import android.os.StatFs
 import com.example.mentra.infrastructure.sensors.StepCounterSensor
 import com.example.mentra.infrastructure.storage.StorageManager
 import com.example.mentra.shell.models.*
@@ -220,46 +218,48 @@ class QueryActionHandler @Inject constructor(
 }
 
 /**
- * Handles phone call actions
+ * Handles phone call actions with comprehensive calling features
  */
 @Singleton
 class CallActionHandler @Inject constructor(
-    @ApplicationContext private val context: Context
+    private val callingHandler: com.example.mentra.shell.calling.ShellCallingCommandHandler
 ) : ActionHandler {
 
     override suspend fun handle(action: ShellAction): ShellResult {
-        val phoneNumber = action.target
+        // Build command string from action
+        val command = buildCallCommand(action)
 
-        if (phoneNumber == null) {
-            return ShellResult(
-                status = ResultStatus.INVALID_COMMAND,
-                message = "Phone number required"
-            )
-        }
+        // Handle via calling command handler
+        val outputs = callingHandler.handleCommand(command)
 
-        return try {
-            val intent = Intent(Intent.ACTION_DIAL).apply {
-                data = android.net.Uri.parse("tel:$phoneNumber")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Convert outputs to shell result
+        val message = outputs.joinToString("\n") { it.text }
+        val status = outputs.firstOrNull()?.type?.let {
+            when (it) {
+                ShellOutputType.SUCCESS -> ResultStatus.SUCCESS
+                ShellOutputType.ERROR -> ResultStatus.FAILURE
+                else -> ResultStatus.SUCCESS
             }
-            context.startActivity(intent)
+        } ?: ResultStatus.SUCCESS
 
-            ShellResult(
-                status = ResultStatus.SUCCESS,
-                message = "Opening dialer for $phoneNumber"
-            )
-        } catch (e: Exception) {
-            ShellResult(
-                status = ResultStatus.FAILURE,
-                message = "Failed to open dialer: ${e.message}",
-                error = e
-            )
+        return ShellResult(
+            status = status,
+            message = message,
+            data = outputs
+        )
+    }
+
+    private fun buildCallCommand(action: ShellAction): String {
+        return when {
+            action.target != null -> "call ${action.target}"
+            action.entity != null -> "call ${action.entity}"
+            else -> "call"
         }
     }
 }
 
 /**
- * Handles SMS/message actions
+ * Handles SMS/message actions with natural language support
  */
 @Singleton
 class MessageActionHandler @Inject constructor(
@@ -272,12 +272,23 @@ class MessageActionHandler @Inject constructor(
 
         if (phoneNumber == null) {
             return ShellResult(
-                status = ResultStatus.INVALID_COMMAND,
-                message = "Phone number required"
+                status = ResultStatus.REQUIRES_CONFIRMATION,
+                message = "📨 New Message\n\nWho would you like to send to?\n\nOptions:\n  1. Enter phone number\n  2. Search contacts\n  3. Use an alias (wife, mom, boss, etc.)\n\nEnter choice or type a name/number:",
+                data = mapOf("type" to "need_recipient", "message" to messageText)
             )
         }
 
         return try {
+            // Check if it's a valid phone number or might be an alias
+            if (!phoneNumber.matches(Regex("^\\+?[0-9]{7,15}$"))) {
+                // Might be an alias or contact name - needs resolution
+                return ShellResult(
+                    status = ResultStatus.REQUIRES_CONFIRMATION,
+                    message = "📱 Looking up \"$phoneNumber\"...\nIf this is an alias, use: alias $phoneNumber = [contact name]",
+                    data = mapOf("type" to "lookup_recipient", "query" to phoneNumber, "message" to messageText)
+                )
+            }
+
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 data = android.net.Uri.parse("sms:$phoneNumber")
                 if (messageText != null) {
@@ -289,7 +300,7 @@ class MessageActionHandler @Inject constructor(
 
             ShellResult(
                 status = ResultStatus.SUCCESS,
-                message = "Opening messaging for $phoneNumber"
+                message = "📱 Opening messaging for $phoneNumber${if (messageText != null) "\n📝 Message: \"$messageText\"" else ""}"
             )
         } catch (e: Exception) {
             ShellResult(

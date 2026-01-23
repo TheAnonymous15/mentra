@@ -1,5 +1,6 @@
 package com.example.mentra.dialer.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -58,17 +59,21 @@ fun DialerScreen(
     // USSD state
     val ussdState by viewModel.ussdState.collectAsState()
 
+    // Default dialer launcher
+    val defaultDialerLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        // Check the status after user makes a choice
+        viewModel.checkDefaultDialerStatus()
+    }
+
     // Load initial number
     LaunchedEffect(initialNumber) {
         initialNumber?.let { viewModel.setInput(it) }
     }
 
-    // Navigate to in-call screen when call starts
-    LaunchedEffect(callState) {
-        if (callState == CallState.DIALING || callState == CallState.ACTIVE) {
-            onNavigateToInCall()
-        }
-    }
+    // Note: Call UI is handled by CallForegroundService which launches InCallActivity
+    // We don't navigate from here to avoid duplicate call UIs
 
     // Filter contacts for keypad
     val filteredContacts: List<DialerContact> = remember(dialerInput) {
@@ -133,6 +138,7 @@ fun DialerScreen(
                                 if (availableSims.size > 1) {
                                     pendingCallNumber = entry.number
                                     pendingCallContactName = entry.contactName
+                                    pendingCallContactPhotoUri = entry.photoUri
                                     showSimModal = true
                                 } else {
                                     viewModel.placeCallToNumber(entry.number)
@@ -154,6 +160,12 @@ fun DialerScreen(
                             },
                             onCallLogAddToContacts = { entry ->
                                 // TODO: Open add contact screen
+                            },
+                            onSetDefaultDialerClick = {
+                                val intent = viewModel.getDefaultDialerIntent()
+                                if (intent != null) {
+                                    defaultDialerLauncher.launch(intent)
+                                }
                             }
                         )
                     }
@@ -169,6 +181,7 @@ fun DialerScreen(
                                 if (availableSims.size > 1) {
                                     pendingCallNumber = entry.number
                                     pendingCallContactName = entry.contactName
+                                    pendingCallContactPhotoUri = entry.photoUri
                                     showSimModal = true
                                 } else {
                                     viewModel.placeCallToNumber(entry.number)

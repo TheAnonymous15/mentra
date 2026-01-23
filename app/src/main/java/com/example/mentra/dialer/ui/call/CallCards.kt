@@ -28,6 +28,7 @@ fun ActiveCallCard(
     phoneNumber: String,
     contactName: String?,
     callDuration: Long,
+    callCost: Double? = null,
     isMuted: Boolean,
     isSpeaker: Boolean,
     isOnHold: Boolean,
@@ -153,13 +154,70 @@ fun ActiveCallCard(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Call duration
-                Text(
-                    text = CallUtils.formatCallDuration(callDuration),
-                    color = CallColors.answerGreen,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                // Call duration with LIVE indicator
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    // Pulsing live dot
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(CallColors.answerGreen, CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "LIVE",
+                        color = CallColors.answerGreen,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = CallUtils.formatCallDuration(callDuration),
+                        color = CallColors.textPure,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // Call cost (only for outgoing calls)
+                callCost?.let { cost ->
+                    if (cost > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = CallColors.neonPurple.copy(alpha = 0.1f),
+                            border = BorderStroke(1.dp, CallColors.neonPurple.copy(alpha = 0.3f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.AttachMoney,
+                                    contentDescription = null,
+                                    tint = CallColors.neonPurple,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Call Cost:",
+                                    color = CallColors.textMuted,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "KSH %.2f".format(cost),
+                                    color = CallColors.neonPurple,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(24.dp))
 

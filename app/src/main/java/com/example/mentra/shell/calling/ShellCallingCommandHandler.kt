@@ -2,14 +2,22 @@ package com.example.mentra.shell.calling
 
 import android.content.Context
 import android.provider.ContactsContract
+import com.example.mentra.dialer.CallState as DialerCallState
 import com.example.mentra.dialer.DialerManager
 import com.example.mentra.dialer.ussd.UssdService
 import com.example.mentra.shell.messaging.ContactAliasManager
 import com.example.mentra.shell.models.ShellOutput
 import com.example.mentra.shell.models.ShellOutputType
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -18,6 +26,7 @@ import javax.inject.Singleton
  * SHELL CALLING COMMAND HANDLER
  * Handles voice call commands via the shell
  * Uses shared ContactAliasManager for alias lookup (same as SMS)
+ * Now also listens for call state changes to detect when other party ends call
  * ═══════════════════════════════════════════════════════════════════
  */
 
@@ -28,6 +37,8 @@ class ShellCallingCommandHandler @Inject constructor(
     private val ussdService: UssdService,
     private val aliasManager: ContactAliasManager
 ) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
     private val _callState = MutableStateFlow<CallState>(CallState.Idle)
     val callState: StateFlow<CallState> = _callState
 
@@ -35,9 +46,81 @@ class ShellCallingCommandHandler @Inject constructor(
     private val _activeCallSession = MutableStateFlow<ActiveCallSession?>(null)
     val activeCallSession: StateFlow<ActiveCallSession?> = _activeCallSession
 
+    // Event to notify shell that call has ended (by either party)
+    private val _callEndedEvent = MutableSharedFlow<CallEndedInfo>()
+    val callEndedEvent: SharedFlow<CallEndedInfo> = _callEndedEvent.asSharedFlow()
+
     // Call control states
     private var isMuted = false
     private var isSpeaker = false
+
+    // Track if the call actually connected (became ACTIVE) to distinguish between
+    // "call failed/not answered" vs "other party ended call"
+    private var callDidConnect = false
+
+    init {
+        // Observe dialer call state to detect when call ends (by either party)
+        scope.launch {
+            dialerManager.callState.collect { dialerState ->
+                handleDialerStateChange(dialerState)
+            }
+        }
+    }
+
+    /**
+     * Handle changes to the dialer call state
+     * This detects when the other party ends the call
+     */
+    private suspend fun handleDialerStateChange(dialerState: DialerCallState) {
+        val session = _activeCallSession.value
+
+        when (dialerState) {
+            DialerCallState.IDLE -> {
+                // Call ended - check if we had an active session
+                if (session != null) {
+                    val duration = formatDuration(session.getDuration())
+                    val name = session.contactName ?: session.phoneNumber
+
+                    // Determine end reason based on whether call actually connected
+                    val endReason = if (callDidConnect) {
+                        "other party"  // Call was connected, then ended
+                    } else {
+                        "call failed"  // Call never connected (rejected, not answered, or failed)
+                    }
+
+                    // Only emit call ended event if call actually connected
+                    // This prevents false "ended by other party" for failed/unanswered calls
+                    if (callDidConnect) {
+                        _callEndedEvent.emit(CallEndedInfo(
+                            phoneNumber = session.phoneNumber,
+                            contactName = session.contactName,
+                            duration = duration,
+                            endedBy = endReason
+                        ))
+                    }
+
+                    // Clean up session
+                    _activeCallSession.value = null
+                    _callState.value = CallState.Idle
+                    isMuted = false
+                    isSpeaker = false
+                    callDidConnect = false
+                }
+            }
+            DialerCallState.ACTIVE -> {
+                // Call became active - mark as connected
+                callDidConnect = true
+
+                // Update state if we have a session
+                if (session != null && _callState.value != CallState.InCall) {
+                    _callState.value = CallState.InCall
+                }
+            }
+            else -> {
+                // Other states (CONNECTING, RINGING, etc.) - no action needed
+            }
+        }
+    }
 
     /**
      * Check if there's an active call session (for terminal listener)
@@ -72,14 +155,11 @@ class ShellCallingCommandHandler @Inject constructor(
 
         return when (trimmedInput) {
             "x", "end", "hangup", "cut" -> {
+                val duration = formatDuration(session.getDuration())
+                val name = session.contactName ?: session.phoneNumber
                 endActiveCall()
                 listOf(
-                    ShellOutput("", ShellOutputType.INFO),
-                    ShellOutput("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", ShellOutputType.ERROR),
-                    ShellOutput("📵 CALL ENDED", ShellOutputType.ERROR),
-                    ShellOutput("  Duration: ${formatDuration(session.getDuration())}", ShellOutputType.INFO),
-                    ShellOutput("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", ShellOutputType.ERROR),
-                    ShellOutput("", ShellOutputType.INFO)
+                    ShellOutput("📵 Call ended: $name [$duration]", ShellOutputType.ERROR)
                 )
             }
             "s", "speaker" -> {
@@ -112,34 +192,18 @@ class ShellCallingCommandHandler @Inject constructor(
     }
 
     /**
-     * Build the ANSI-style active call display
+     * Build minimal one-liner active call display
      */
     private fun buildActiveCallDisplay(session: ActiveCallSession, statusMessage: String = ""): List<ShellOutput> {
         val duration = formatDuration(session.getDuration())
         val name = session.contactName ?: session.phoneNumber
-        val speakerStatus = if (isSpeaker) "ON" else "OFF"
-        val muteStatus = if (isMuted) "MUTED" else "ON"
+        val icons = buildString {
+            if (isSpeaker) append("🔊 ")
+            if (isMuted) append("🔇 ")
+        }
 
         return buildList {
-            add(ShellOutput("", ShellOutputType.INFO))
-            add(ShellOutput("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", ShellOutputType.SUCCESS))
-            add(ShellOutput("📞 ACTIVE CALL", ShellOutputType.SUCCESS))
-            add(ShellOutput("", ShellOutputType.INFO))
-            add(ShellOutput("  Contact: $name", ShellOutputType.INFO))
-            if (session.contactName != null) {
-                add(ShellOutput("  Number:  ${session.phoneNumber}", ShellOutputType.INFO))
-            }
-            add(ShellOutput("  SIM:     SIM ${session.simSlot + 1}", ShellOutputType.INFO))
-            add(ShellOutput("", ShellOutputType.INFO))
-            add(ShellOutput("  ⏱️ $duration", ShellOutputType.WARNING))
-            add(ShellOutput("  🔊 Speaker: $speakerStatus   🎤 Mic: $muteStatus", ShellOutputType.INFO))
-            add(ShellOutput("", ShellOutputType.INFO))
-            add(ShellOutput("  [X] End  [S] Speaker  [M] Mute  [H] Hold", ShellOutputType.PROMPT))
-            add(ShellOutput("  [0-9] DTMF for IVR/Extensions  [?] Help", ShellOutputType.PROMPT))
-            add(ShellOutput("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", ShellOutputType.SUCCESS))
-            if (statusMessage.isNotEmpty()) {
-                add(ShellOutput("→ $statusMessage", ShellOutputType.WARNING))
-            }
+            add(ShellOutput("📞 $name [$duration] $icons| X=End S=Spkr M=Mute ${if (statusMessage.isNotEmpty()) "→ $statusMessage" else ""}", ShellOutputType.SUCCESS))
         }
     }
 
@@ -156,21 +220,12 @@ class ShellCallingCommandHandler @Inject constructor(
         _activeCallSession.value = session
         isMuted = false
         isSpeaker = false
+        callDidConnect = false  // Reset connection tracking for new call
 
-        return buildList {
-            add(ShellOutput("", ShellOutputType.INFO))
-            add(ShellOutput("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", ShellOutputType.SUCCESS))
-            add(ShellOutput("📞 INITIATING CALL...", ShellOutputType.SUCCESS))
-            add(ShellOutput("", ShellOutputType.INFO))
-            add(ShellOutput("  To:  ${contactName ?: phoneNumber}", ShellOutputType.INFO))
-            add(ShellOutput("  Via: SIM ${simSlot + 1}", ShellOutputType.INFO))
-            add(ShellOutput("", ShellOutputType.INFO))
-            add(ShellOutput("  🔔 Ringing...", ShellOutputType.WARNING))
-            add(ShellOutput("", ShellOutputType.INFO))
-            add(ShellOutput("  [X] End  [S] Speaker  [M] Mute  [0-9] DTMF", ShellOutputType.PROMPT))
-            add(ShellOutput("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", ShellOutputType.SUCCESS))
-            add(ShellOutput("Type X to end, or 0-9 for IVR:", ShellOutputType.PROMPT))
-        }
+        val name = contactName ?: phoneNumber
+        return listOf(
+            ShellOutput("📞 Calling $name (SIM ${simSlot + 1})... | X=End S=Spkr M=Mute", ShellOutputType.SUCCESS)
+        )
     }
 
     /**
@@ -218,6 +273,23 @@ class ShellCallingCommandHandler @Inject constructor(
             String.format("%02d:%02d:%02d", hours, minutes, secs)
         } else {
             String.format("%02d:%02d", minutes, secs)
+        }
+    }
+
+    /**
+     * Build SIM selection prompt dynamically based on available SIMs
+     */
+    private fun buildSimSelectionPrompt(
+        headerMessage: String,
+        availableSims: List<com.example.mentra.dialer.SimAccount>
+    ): List<ShellOutput> {
+        return buildList {
+            add(ShellOutput(text = headerMessage, type = ShellOutputType.INFO))
+            add(ShellOutput(text = "Select SIM:", type = ShellOutputType.PROMPT))
+            availableSims.forEachIndexed { index, sim ->
+                val carrierName = sim.carrierName ?: "SIM ${index + 1}"
+                add(ShellOutput(text = "${index + 1}. $carrierName", type = ShellOutputType.INFO))
+            }
         }
     }
 
@@ -354,33 +426,29 @@ class ShellCallingCommandHandler @Inject constructor(
                 // Execute USSD with specific SIM - ensure state is Idle (no call listener)
                 _callState.value = CallState.Idle
                 ussdService.executeUssd(ussdCode, simSlot)
-                listOf(
-
-                )
+                listOf()
             } else {
-                // Show SIM selection
-                _callState.value = CallState.AwaitingSimSelection(
-                    action = CallAction.Ussd(ussdCode)
-                )
-                listOf(
-                    ShellOutput(
-                        text = "Select SIM:",
-                        type = ShellOutputType.PROMPT
-                    ),
-                    ShellOutput(
-                        text = "1. SIM 1",
-                        type = ShellOutputType.INFO
-                    ),
-                    ShellOutput(
-                        text = "2. SIM 2",
-                        type = ShellOutputType.INFO
+                // Check available SIMs
+                val availableSims = dialerManager.availableSims.value
+
+                // If only one SIM, auto-select it
+                if (availableSims.size <= 1) {
+                    val autoSimSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                    _callState.value = CallState.Idle
+                    ussdService.executeUssd(ussdCode, autoSimSlot)
+                    listOf()
+                } else {
+                    // Multiple SIMs - show selection
+                    _callState.value = CallState.AwaitingSimSelection(
+                        action = CallAction.Ussd(ussdCode)
                     )
-                )
+                    buildSimSelectionPrompt("USSD: $ussdCode", availableSims)
+                }
             }
         } else {
             listOf(
                 ShellOutput(
-                    text = "Undefined shotcut",
+                    text = "Undefined shortcut",
                     type = ShellOutputType.ERROR
                 )
             )
@@ -388,9 +456,69 @@ class ShellCallingCommandHandler @Inject constructor(
     }
 
     /**
+     * ═══════════════════════════════════════════════════════════════════
+     * USSD CODE DETECTION
+     * Detects if input is a USSD code
+     * USSD codes: start with * or # and end with #
+     * Examples: *123#, *100#, #100#, *144*1#, *247#, *544*44#
+     * ═══════════════════════════════════════════════════════════════════
+     */
+    private fun isUssdCode(input: String): Boolean {
+        val trimmed = input.trim()
+        // USSD codes typically start with * or # and end with #
+        // They contain only digits, *, and #
+        return (trimmed.startsWith("*") || trimmed.startsWith("#")) &&
+               trimmed.endsWith("#") &&
+               trimmed.length >= 3 && // At least *n# or #n#
+               trimmed.all { it in "0123456789*#" }
+    }
+
+    /**
+     * Handle USSD code - forward to system dialer
+     * System dialer handles USSD sessions properly
+     */
+    private suspend fun handleUssdCode(ussdCode: String, simSlot: Int?): List<ShellOutput> {
+        // Ensure state is Idle (no call listener) for USSD
+        _callState.value = CallState.Idle
+
+        return if (simSlot != null) {
+            // SIM already specified - execute USSD directly via system dialer
+            ussdService.executeUssd(ussdCode, simSlot)
+            listOf(
+                ShellOutput(
+                    text = "📲 Dialing USSD: $ussdCode (SIM ${simSlot + 1})",
+                    type = ShellOutputType.SUCCESS
+                )
+            )
+        } else {
+            // Check available SIMs
+            val availableSims = dialerManager.availableSims.value
+
+            // If only one SIM, auto-select it
+            if (availableSims.size <= 1) {
+                val autoSimSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                ussdService.executeUssd(ussdCode, autoSimSlot)
+                listOf(
+                    ShellOutput(
+                        text = "📲 Dialing USSD: $ussdCode",
+                        type = ShellOutputType.SUCCESS
+                    )
+                )
+            } else {
+                // Multiple SIMs - show selection
+                _callState.value = CallState.AwaitingSimSelection(
+                    action = CallAction.Ussd(ussdCode)
+                )
+                buildSimSelectionPrompt("📲 USSD: $ussdCode", availableSims)
+            }
+        }
+    }
+
+    /**
      * Handle direct call command with name/number
      * Checks aliases first (shared with SMS), then contacts
      * Supports direct SIM specification: "call my wife sim 2"
+     * Detects USSD codes and forwards to system dialer
      */
     private suspend fun handleCallCommand(target: String): List<ShellOutput> {
         // Extract SIM preference if specified in the command
@@ -408,39 +536,43 @@ class ShellCallingCommandHandler @Inject constructor(
             .replace(" sim2", "")
             .trim()
 
+        // ═══════════════════════════════════════════════════════════════
+        // USSD CODE DETECTION - Check FIRST before treating as phone number
+        // USSD codes: start with * or # and end with #
+        // Examples: *123#, *100#, #100#, *144*1#, *247#
+        // ═══════════════════════════════════════════════════════════════
+        if (isUssdCode(cleanTarget)) {
+            return handleUssdCode(cleanTarget, simFromCommand)
+        }
+
         // Check if it's a phone number first
         val phoneNumber = extractPhoneNumber(cleanTarget)
 
         if (phoneNumber != null) {
             // Direct phone number
             if (simFromCommand != null) {
-                // SIM already specified - make the call directly
-                dialerManager.placeCall(phoneNumber, simFromCommand)
+                // SIM already specified - make the call directly (background, no UI)
+                dialerManager.placeCallBackground(phoneNumber, simFromCommand)
                 _callState.value = CallState.InCall
                 return startActiveCallSession(phoneNumber, null, simFromCommand)
             }
 
+            // Check available SIMs
+            val availableSims = dialerManager.availableSims.value
+
+            // If only one SIM, auto-select it
+            if (availableSims.size <= 1) {
+                val simSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                dialerManager.placeCallBackground(phoneNumber, simSlot)
+                _callState.value = CallState.InCall
+                return startActiveCallSession(phoneNumber, null, simSlot)
+            }
+
+            // Multiple SIMs - show selection
             _callState.value = CallState.AwaitingSimSelection(
                 action = CallAction.Call(phoneNumber, null)
             )
-            return listOf(
-                ShellOutput(
-                    text = "📞 Calling: $phoneNumber",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "Select SIM:",
-                    type = ShellOutputType.PROMPT
-                ),
-                ShellOutput(
-                    text = "1. SIM 1",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "2. SIM 2",
-                    type = ShellOutputType.INFO
-                )
-            )
+            return buildSimSelectionPrompt("📞 Calling: $phoneNumber", availableSims)
         }
 
         // Check if target is an alias (e.g., "my wife", "wife", "mom")
@@ -455,37 +587,32 @@ class ShellCallingCommandHandler @Inject constructor(
             val number = aliasContact.phoneNumbers.first()
 
             if (simFromCommand != null) {
-                // SIM already specified - make the call directly
-                dialerManager.placeCall(number, simFromCommand)
+                // SIM already specified - make the call directly (background, no UI)
+                dialerManager.placeCallBackground(number, simFromCommand)
                 _callState.value = CallState.InCall
                 return startActiveCallSession(number, aliasContact.name, simFromCommand)
             }
 
+            // Check available SIMs
+            val availableSims = dialerManager.availableSims.value
+
+            // If only one SIM, auto-select it
+            if (availableSims.size <= 1) {
+                val simSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                dialerManager.placeCallBackground(number, simSlot)
+                _callState.value = CallState.InCall
+                return startActiveCallSession(number, aliasContact.name, simSlot)
+            }
+
+            // Multiple SIMs - show selection
             _callState.value = CallState.AwaitingSimSelection(
                 action = CallAction.Call(number, aliasContact.name)
             )
-            return listOf(
-                ShellOutput(
-                    text = "📞 Calling ${aliasContact.name} (alias: $aliasTarget)",
-                    type = ShellOutputType.SUCCESS
-                ),
-                ShellOutput(
-                    text = "Number: $number",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "Select SIM:",
-                    type = ShellOutputType.PROMPT
-                ),
-                ShellOutput(
-                    text = "1. SIM 1",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "2. SIM 2",
-                    type = ShellOutputType.INFO
-                )
-            )
+            return buildList {
+                add(ShellOutput(text = "📞 Calling ${aliasContact.name} (alias: $aliasTarget)", type = ShellOutputType.SUCCESS))
+                add(ShellOutput(text = "Number: $number", type = ShellOutputType.INFO))
+                addAll(buildSimSelectionPrompt("", availableSims).drop(1)) // Skip header, add SIM options
+            }
         }
 
         // Not a phone number or alias - search contacts by name
@@ -533,37 +660,32 @@ class ShellCallingCommandHandler @Inject constructor(
                 val contact = contacts.first()
 
                 if (simFromCommand != null) {
-                    // SIM already specified - make the call directly
-                    dialerManager.placeCall(contact.number, simFromCommand)
+                    // SIM already specified - make the call directly (background, no UI)
+                    dialerManager.placeCallBackground(contact.number, simFromCommand)
                     _callState.value = CallState.InCall
                     return startActiveCallSession(contact.number, contact.name, simFromCommand)
                 }
 
+                // Check available SIMs
+                val availableSims = dialerManager.availableSims.value
+
+                // If only one SIM, auto-select it
+                if (availableSims.size <= 1) {
+                    val simSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                    dialerManager.placeCallBackground(contact.number, simSlot)
+                    _callState.value = CallState.InCall
+                    return startActiveCallSession(contact.number, contact.name, simSlot)
+                }
+
+                // Multiple SIMs - show selection
                 _callState.value = CallState.AwaitingSimSelection(
                     action = CallAction.Call(contact.number, contact.name)
                 )
-                listOf(
-                    ShellOutput(
-                        text = "📞 Calling ${contact.name}",
-                        type = ShellOutputType.INFO
-                    ),
-                    ShellOutput(
-                        text = "Number: ${contact.number}",
-                        type = ShellOutputType.INFO
-                    ),
-                    ShellOutput(
-                        text = "Select SIM:",
-                        type = ShellOutputType.PROMPT
-                    ),
-                    ShellOutput(
-                        text = "1. SIM 1",
-                        type = ShellOutputType.INFO
-                    ),
-                    ShellOutput(
-                        text = "2. SIM 2",
-                        type = ShellOutputType.INFO
-                    )
-                )
+                buildList {
+                    add(ShellOutput(text = "📞 Calling ${contact.name}", type = ShellOutputType.INFO))
+                    add(ShellOutput(text = "Number: ${contact.number}", type = ShellOutputType.INFO))
+                    addAll(buildSimSelectionPrompt("", availableSims).drop(1))
+                }
             }
             else -> {
                 // Multiple matches - show contact selection
@@ -680,27 +802,22 @@ class ShellCallingCommandHandler @Inject constructor(
         val phoneNumber = extractPhoneNumber(number)
 
         return if (phoneNumber != null && isValidPhoneNumber(phoneNumber)) {
+            // Check available SIMs
+            val availableSims = dialerManager.availableSims.value
+
+            // If only one SIM, auto-select it
+            if (availableSims.size <= 1) {
+                val simSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                dialerManager.placeCallBackground(phoneNumber, simSlot)
+                _callState.value = CallState.InCall
+                return startActiveCallSession(phoneNumber, null, simSlot)
+            }
+
+            // Multiple SIMs - show selection
             _callState.value = CallState.AwaitingSimSelection(
                 action = CallAction.Call(phoneNumber, null)
             )
-            listOf(
-                ShellOutput(
-                    text = "Calling: $phoneNumber",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "Select SIM:",
-                    type = ShellOutputType.PROMPT
-                ),
-                ShellOutput(
-                    text = "1. SIM 1",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "2. SIM 2",
-                    type = ShellOutputType.INFO
-                )
-            )
+            buildSimSelectionPrompt("Calling: $phoneNumber", availableSims)
         } else {
             listOf(
                 ShellOutput(
@@ -721,31 +838,27 @@ class ShellCallingCommandHandler @Inject constructor(
 
         if (aliasContact != null && aliasContact.phoneNumbers.isNotEmpty()) {
             val number = aliasContact.phoneNumbers.first()
+
+            // Check available SIMs
+            val availableSims = dialerManager.availableSims.value
+
+            // If only one SIM, auto-select it
+            if (availableSims.size <= 1) {
+                val simSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                dialerManager.placeCallBackground(number, simSlot)
+                _callState.value = CallState.InCall
+                return startActiveCallSession(number, aliasContact.name, simSlot)
+            }
+
+            // Multiple SIMs - show selection
             _callState.value = CallState.AwaitingSimSelection(
                 action = CallAction.Call(number, aliasContact.name)
             )
-            return listOf(
-                ShellOutput(
-                    text = "📞 Calling ${aliasContact.name} (alias: $normalizedAlias)",
-                    type = ShellOutputType.SUCCESS
-                ),
-                ShellOutput(
-                    text = "Number: $number",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "Select SIM:",
-                    type = ShellOutputType.PROMPT
-                ),
-                ShellOutput(
-                    text = "1. SIM 1",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "2. SIM 2",
-                    type = ShellOutputType.INFO
-                )
-            )
+            return buildList {
+                add(ShellOutput(text = "📞 Calling ${aliasContact.name} (alias: $normalizedAlias)", type = ShellOutputType.SUCCESS))
+                add(ShellOutput(text = "Number: $number", type = ShellOutputType.INFO))
+                addAll(buildSimSelectionPrompt("", availableSims).drop(1))
+            }
         }
 
         // Fallback: search contacts by name
@@ -753,31 +866,27 @@ class ShellCallingCommandHandler @Inject constructor(
 
         return if (contacts.isNotEmpty()) {
             val contact = contacts.first()
+
+            // Check available SIMs
+            val availableSims = dialerManager.availableSims.value
+
+            // If only one SIM, auto-select it
+            if (availableSims.size <= 1) {
+                val simSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                dialerManager.placeCallBackground(contact.number, simSlot)
+                _callState.value = CallState.InCall
+                return startActiveCallSession(contact.number, contact.name, simSlot)
+            }
+
+            // Multiple SIMs - show selection
             _callState.value = CallState.AwaitingSimSelection(
                 action = CallAction.Call(contact.number, contact.name)
             )
-            listOf(
-                ShellOutput(
-                    text = "📞 Calling ${contact.name}",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "Number: ${contact.number}",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "Select SIM:",
-                    type = ShellOutputType.PROMPT
-                ),
-                ShellOutput(
-                    text = "1. SIM 1",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "2. SIM 2",
-                    type = ShellOutputType.INFO
-                )
-            )
+            buildList {
+                add(ShellOutput(text = "📞 Calling ${contact.name}", type = ShellOutputType.INFO))
+                add(ShellOutput(text = "Number: ${contact.number}", type = ShellOutputType.INFO))
+                addAll(buildSimSelectionPrompt("", availableSims).drop(1))
+            }
         } else {
             listOf(
                 ShellOutput(
@@ -800,31 +909,27 @@ class ShellCallingCommandHandler @Inject constructor(
 
         return if (index != null && index in contacts.indices) {
             val contact = contacts[index]
+
+            // Check available SIMs
+            val availableSims = dialerManager.availableSims.value
+
+            // If only one SIM, auto-select it
+            if (availableSims.size <= 1) {
+                val simSlot = availableSims.firstOrNull()?.slotIndex ?: 0
+                dialerManager.placeCallBackground(contact.number, simSlot)
+                _callState.value = CallState.InCall
+                return startActiveCallSession(contact.number, contact.name, simSlot)
+            }
+
+            // Multiple SIMs - show selection
             _callState.value = CallState.AwaitingSimSelection(
                 action = CallAction.Call(contact.number, contact.name)
             )
-            listOf(
-                ShellOutput(
-                    text = "Calling ${contact.name}",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "Number: ${contact.number}",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "Select SIM:",
-                    type = ShellOutputType.PROMPT
-                ),
-                ShellOutput(
-                    text = "1. SIM 1",
-                    type = ShellOutputType.INFO
-                ),
-                ShellOutput(
-                    text = "2. SIM 2",
-                    type = ShellOutputType.INFO
-                )
-            )
+            buildList {
+                add(ShellOutput(text = "Calling ${contact.name}", type = ShellOutputType.INFO))
+                add(ShellOutput(text = "Number: ${contact.number}", type = ShellOutputType.INFO))
+                addAll(buildSimSelectionPrompt("", availableSims).drop(1))
+            }
         } else {
             listOf(
                 ShellOutput(
@@ -848,8 +953,8 @@ class ShellCallingCommandHandler @Inject constructor(
         return if (simSlot != null) {
             when (action) {
                 is CallAction.Call -> {
-                    // Place the call
-                    dialerManager.placeCall(action.phoneNumber, simSlot)
+                    // Place the call in background (no UI)
+                    dialerManager.placeCallBackground(action.phoneNumber, simSlot)
                     _callState.value = CallState.InCall
 
                     // Start terminal-based call session and return ANSI display
@@ -921,10 +1026,11 @@ class ShellCallingCommandHandler @Inject constructor(
 
     /**
      * Place a call directly with SIM already selected (from contact picker with integrated SIM buttons)
+     * Uses background calling - no UI shown
      */
     fun placeCallDirectly(phoneNumber: String, contactName: String?, simSlot: Int): List<ShellOutput> {
-        // Place the call
-        dialerManager.placeCall(phoneNumber, simSlot)
+        // Place the call in background (no UI)
+        dialerManager.placeCallBackground(phoneNumber, simSlot)
         _callState.value = CallState.InCall
 
         // Start terminal-based call session and return ANSI display
@@ -1024,3 +1130,14 @@ data class ActiveCallSession(
 ) {
     fun getDuration(): Long = System.currentTimeMillis() - startTime
 }
+
+/**
+ * Information about a call that ended
+ */
+data class CallEndedInfo(
+    val phoneNumber: String,
+    val contactName: String?,
+    val duration: String,
+    val endedBy: String  // "user" or "other party"
+)
+

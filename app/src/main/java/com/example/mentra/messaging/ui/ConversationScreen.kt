@@ -36,9 +36,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.platform.LocalContext
 import com.example.mentra.messaging.*
 import com.example.mentra.messaging.ui.theme.NexusColors
-import com.example.mentra.dialer.ui.NexusCallModal
-import com.example.mentra.dialer.ui.CallModalData
-import com.example.mentra.dialer.DialerManager
+import com.example.mentra.dialer.ui.NexusSimSelectionModal
+import com.example.mentra.dialer.DialerManagerProvider
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -283,7 +282,7 @@ fun ConversationScreen(
         }
     }
 
-    // Call Modal
+    // Call Modal - SIM selection only
     if (showCallModal) {
         val contactName = allMessages.firstOrNull()?.let {
             // Try to get contact name from the first message
@@ -299,23 +298,20 @@ fun ConversationScreen(
             )
         }
 
-        NexusCallModal(
-            data = CallModalData(
-                phoneNumber = phoneNumber,
-                contactName = contactName
-            ),
+        // Only show SIM selection modal - close after call is placed
+        // InCallActivity will handle the in-call UI
+        NexusSimSelectionModal(
+            phoneNumber = phoneNumber,
+            contactName = contactName,
             availableSims = simInfoList,
-            onDismiss = { showCallModal = false },
-            onCall = { simSlot ->
-                // Place the call - modal will handle its own state transitions
-                val dialerManager = DialerManager(context)
-                dialerManager.placeCall(phoneNumber, simSlot)
-                // Don't close modal here - it transitions to CALLING state automatically
+            onDismiss = {
+                showCallModal = false
             },
-            onEndCall = {
-                // End call and close modal
-                val dialerManager = DialerManager(context)
-                dialerManager.endCall()
+            onSimSelected = { simSlot ->
+                // Place the call and close modal immediately
+                // CallForegroundService will launch InCallActivity after 0.9s
+                val dialerManager = DialerManagerProvider.getDialerManager()
+                dialerManager?.placeCall(phoneNumber, simSlot)
                 showCallModal = false
             }
         )

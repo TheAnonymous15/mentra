@@ -19,6 +19,9 @@ import android.telephony.PhoneNumberUtils
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
+import com.example.mentra.dialer.billing.BillingInfo
+import com.example.mentra.dialer.billing.NexusBillCalculator
+import com.example.mentra.dialer.proximity.NexusProximitySensorHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,7 +44,9 @@ import javax.inject.Singleton
  */
 @Singleton
 class DialerManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val billCalculator: NexusBillCalculator,
+    private val proximitySensorHandler: NexusProximitySensorHandler
 ) {
     private val telecomManager: TelecomManager? by lazy {
         context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
@@ -72,12 +77,33 @@ class DialerManager @Inject constructor(
     private val _isDefaultDialer = MutableStateFlow(false)
     val isDefaultDialer: StateFlow<Boolean> = _isDefaultDialer.asStateFlow()
 
+    // Flag to indicate shell-initiated call (no UI should be shown)
+    private val _isShellCall = MutableStateFlow(false)
+    val isShellCall: StateFlow<Boolean> = _isShellCall.asStateFlow()
+
+    // Flag to indicate an in-call UI is already showing (prevents duplicate modals)
+    private val _isCallUiShowing = MutableStateFlow(false)
+    val isCallUiShowing: StateFlow<Boolean> = _isCallUiShowing.asStateFlow()
+
+    // Billing info - exposed from NexusBillCalculator
+    val currentBillingInfo: StateFlow<BillingInfo?> = billCalculator.currentBillingInfo
+    val totalCallCost: StateFlow<Double> = billCalculator.totalCost
+    val isBillingTracking: StateFlow<Boolean> = billCalculator.isTracking
+
+    // Proximity sensor state
+    val isProximityNear: StateFlow<Boolean> = proximitySensorHandler.isNear
+
     // Active call reference (managed by InCallService)
     private var activeCall: Call? = null
+
+    // Track current call SIM slot for billing
+    private var currentCallSimSlot: Int = -1
 
     init {
         loadAvailableSims()
         checkDefaultDialerStatus()
+        // Register with provider so CallForegroundService can access shell call flag
+        DialerManagerProvider.setDialerManager(this)
     }
 
     /**
@@ -119,6 +145,88 @@ class DialerManager @Inject constructor(
     // ============================================
     // OUTGOING CALL HANDLING
     // ============================================
+
+    /**
+     * Place an outgoing call in background mode (no UI)
+     * Used by shell terminal for call control via text commands
+     * Uses only TelecomManager to avoid showing any system dialer UI
+     *
+     * @param phoneNumber The number to dial
+     * @param simSlot SIM slot index
+     * @return Result indicating success or failure
+     */
+    fun placeCallBackground(phoneNumber: String, simSlot: Int = -1): CallResult {
+        // Permission check
+        if (!hasCallPermission()) {
+            android.util.Log.e("DialerManager", "CALL_PHONE permission not granted")
+            return CallResult.Error(CallError.PERMISSION_DENIED)
+        }
+
+        // Validate phone number
+        val normalizedNumber = normalizePhoneNumber(phoneNumber)
+        if (normalizedNumber.isBlank()) {
+            android.util.Log.e("DialerManager", "Invalid phone number: $phoneNumber")
+            return CallResult.Error(CallError.INVALID_NUMBER)
+        }
+
+        // Mark this as a shell call - no UI should be shown
+        _isShellCall.value = true
+
+        // Track SIM slot for billing
+        currentCallSimSlot = simSlot
+
+        // Update internal state
+        val callStartTime = System.currentTimeMillis()
+        _callState.value = CallState.DIALING
+        _currentCall.value = CallInfo(
+            number = normalizedNumber,
+            direction = CallDirection.OUTGOING,
+            state = CallState.DIALING,
+            startTime = callStartTime,
+            simSlot = simSlot
+        )
+
+        return try {
+            android.util.Log.d("DialerManager", "Placing background call to: $normalizedNumber")
+
+            // Get phone account handle for SIM selection
+            val phoneAccountHandle: PhoneAccountHandle? = if (simSlot >= 0) {
+                _availableSims.value.getOrNull(simSlot)?.phoneAccountHandle
+            } else {
+                null
+            }
+
+            // Use TelecomManager.placeCall() exclusively - no system dialer UI
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && telecomManager != null) {
+                val extras = android.os.Bundle().apply {
+                    if (phoneAccountHandle != null) {
+                        putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+                    }
+                    putInt(TelecomManager.EXTRA_START_CALL_WITH_VIDEO_STATE, VideoProfile.STATE_AUDIO_ONLY)
+                }
+
+                telecomManager?.placeCall(Uri.parse("tel:$normalizedNumber"), extras)
+                android.util.Log.d("DialerManager", "Background call placed via TelecomManager (no UI)")
+                CallResult.Success
+            } else {
+                android.util.Log.e("DialerManager", "TelecomManager not available for background call")
+                _callState.value = CallState.IDLE
+                _currentCall.value = null
+                CallResult.Error(CallError.UNKNOWN, "TelecomManager not available")
+            }
+
+        } catch (e: SecurityException) {
+            android.util.Log.e("DialerManager", "SecurityException placing background call - may need default dialer", e)
+            _callState.value = CallState.IDLE
+            _currentCall.value = null
+            CallResult.Error(CallError.PERMISSION_DENIED, "Need to be default dialer for background calls")
+        } catch (e: Exception) {
+            android.util.Log.e("DialerManager", "Exception placing background call", e)
+            _callState.value = CallState.IDLE
+            _currentCall.value = null
+            CallResult.Error(CallError.UNKNOWN, e.message)
+        }
+    }
 
     /**
      * Place an outgoing call
@@ -179,6 +287,9 @@ class DialerManager @Inject constructor(
                 CallResult.Error(CallError.UNKNOWN, e.message)
             }
         }
+
+        // Track SIM slot for billing
+        currentCallSimSlot = simSlot
 
         // Update internal state FIRST - our UI should show immediately
         val callStartTime = System.currentTimeMillis()
@@ -282,11 +393,13 @@ class DialerManager @Inject constructor(
             if (success) {
                 _callState.value = CallState.DISCONNECTED
                 _currentCall.value = null
+                _isShellCall.value = false // Clear shell call flag
             }
 
             success
         } catch (e: Exception) {
             android.util.Log.e("DialerManager", "Exception ending call", e)
+            _isShellCall.value = false // Clear shell call flag on error too
             false
         }
     }
@@ -317,6 +430,30 @@ class DialerManager @Inject constructor(
         } catch (e: Exception) {
             false
         }
+    }
+
+    // ============================================
+    // CALL UI STATE MANAGEMENT
+    // ============================================
+
+    /**
+     * Mark that an in-call UI is showing
+     * Call this when showing a call modal from ConversationScreen, etc.
+     * Prevents CallForegroundService from launching duplicate InCallActivity
+     */
+    fun setCallUiShowing(showing: Boolean) {
+        _isCallUiShowing.value = showing
+        android.util.Log.d("DialerManager", "Call UI showing: $showing")
+    }
+
+    /**
+     * Check if call should show UI
+     * Returns false if it's a shell call OR if UI is already showing
+     */
+    fun shouldShowCallUi(): Boolean {
+        val result = !_isShellCall.value && !_isCallUiShowing.value
+        android.util.Log.d("DialerManager", "Should show call UI: $result (shell=${_isShellCall.value}, uiShowing=${_isCallUiShowing.value})")
+        return result
     }
 
     // ============================================
@@ -529,14 +666,21 @@ class DialerManager @Inject constructor(
     internal fun onCallRemoved(call: Call) {
         call.unregisterCallback(callCallback)
 
+        // Stop billing if still tracking
+        val finalBilling = billCalculator.stopTracking()
+
+        // Disable proximity sensor
+        proximitySensorHandler.disable()
+
         // Calculate duration if call was connected
         _currentCall.value?.let { info ->
             if (info.connectTime > 0) {
                 val duration = System.currentTimeMillis() - info.connectTime
-                // Log call to history
+                // Log call to history with final cost
                 logCallToHistory(info.copy(
                     state = CallState.DISCONNECTED,
-                    duration = duration
+                    duration = duration,
+                    finalCost = finalBilling?.totalCost ?: 0.0
                 ))
             }
         }
@@ -544,6 +688,11 @@ class DialerManager @Inject constructor(
         activeCall = null
         _currentCall.value = null
         _callState.value = CallState.IDLE
+        currentCallSimSlot = -1
+
+        // Clear call UI and shell call flags
+        _isShellCall.value = false
+        _isCallUiShowing.value = false
 
         // Reset audio state
         _audioState.value = AudioRouteState()
@@ -567,14 +716,36 @@ class DialerManager @Inject constructor(
         _currentCall.value = _currentCall.value?.copy(state = newState)
 
         when (state) {
+            Call.STATE_DIALING, Call.STATE_RINGING -> {
+                // Enable proximity sensor when call starts (dialing or ringing)
+                proximitySensorHandler.enable()
+            }
             Call.STATE_ACTIVE -> {
-                // Call connected
+                // Call connected - start billing for OUTGOING calls only
                 _currentCall.value = _currentCall.value?.copy(
                     connectTime = System.currentTimeMillis()
                 )
+
+                // Start billing only for outgoing calls (not USSD)
+                val currentCallInfo = _currentCall.value
+                if (currentCallInfo?.direction == CallDirection.OUTGOING &&
+                    !isUssdCode(currentCallInfo.number)) {
+                    billCalculator.startTracking(currentCallSimSlot)
+                    android.util.Log.d("DialerManager", "Billing started for outgoing call")
+                }
             }
             Call.STATE_DISCONNECTED -> {
-                // Call ended - will be handled in onCallRemoved
+                // Call ended - stop billing and proximity
+                val finalBilling = billCalculator.stopTracking()
+                proximitySensorHandler.disable()
+
+                // Store final billing info for display
+                if (finalBilling != null) {
+                    _currentCall.value = _currentCall.value?.copy(
+                        finalCost = finalBilling.totalCost
+                    )
+                    android.util.Log.d("DialerManager", "Call ended, final cost: ${finalBilling.getFormattedCost()}")
+                }
             }
         }
     }
@@ -730,6 +901,27 @@ class DialerManager @Inject constructor(
         }
     }
 
+    /**
+     * Check if a number is a USSD code
+     * USSD codes typically start with * and end with #
+     */
+    fun isUssdCode(number: String): Boolean {
+        val trimmed = number.trim()
+        return trimmed.startsWith("*") ||
+               trimmed.startsWith("#") ||
+               (trimmed.contains("*") && trimmed.contains("#"))
+    }
+
+    /**
+     * Get formatted current call cost
+     */
+    fun getFormattedCallCost(): String = billCalculator.getFormattedCost()
+
+    /**
+     * Get call cost display string with MNO info
+     */
+    fun getCallCostDisplay(): String = billCalculator.getEstimatedCostDisplay()
+
     // ============================================
     // CALL LOG
     // ============================================
@@ -830,7 +1022,8 @@ data class CallInfo(
     val duration: Long = 0L,
     val simSlot: Int = -1,
     val isOnHold: Boolean = false,
-    val contactName: String? = null
+    val contactName: String? = null,
+    val finalCost: Double = 0.0 // Final call cost in KSH
 )
 
 data class AudioRouteState(

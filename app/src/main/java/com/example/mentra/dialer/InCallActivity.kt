@@ -24,6 +24,9 @@ class InCallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Mark that call UI is showing
+        dialerManager.setCallUiShowing(true)
+
         // Keep screen on during call
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -45,13 +48,17 @@ class InCallActivity : ComponentActivity() {
         }
     }
 
+    @Deprecated("Deprecated in Java", ReplaceWith("onBackPressedDispatcher.onBackPressed()"))
     override fun onBackPressed() {
         // Don't allow back button during call
         // User must use end call button
+        // Intentionally not calling super.onBackPressed()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        // Clear the flag when activity is destroyed
+        dialerManager.setCallUiShowing(false)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 }

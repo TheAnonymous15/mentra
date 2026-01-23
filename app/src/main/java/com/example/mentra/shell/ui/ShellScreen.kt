@@ -49,7 +49,10 @@ import com.example.mentra.shell.messaging.ContactPickerRequest
 import com.example.mentra.shell.messaging.ShellMessagingCommandHandler
 import com.example.mentra.shell.messaging.ShellMessagingService
 import com.example.mentra.shell.messaging.ui.ShellContactPickerDialog
+import com.example.mentra.shell.ui.keyboard.TerminalKeyboard
 import com.example.mentra.shell.calling.ui.ShellCallingContactPickerDialog
+import com.example.mentra.shell.calculator.NexusCalculatorModal
+import com.example.mentra.shell.calendar.NexusCalendarModal
 import com.example.mentra.shell.models.ShellResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -105,7 +108,10 @@ private val terminalFont = FontFamily.Monospace
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShellScreen(
-    viewModel: ShellViewModel = hiltViewModel()
+    viewModel: ShellViewModel = hiltViewModel(),
+    onNavigateToMessages: () -> Unit = {},
+    onNavigateToDialer: () -> Unit = {},
+    appCacheService: com.example.mentra.shell.apps.AppCacheService? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val contactPickerRequest by viewModel.contactPickerRequest.collectAsState()
@@ -114,11 +120,16 @@ fun ShellScreen(
     val listState = rememberLazyListState()
 
     val focusRequester = remember { FocusRequester() }
-    val keyboardController = LocalSoftwareKeyboardController.current
     val haptic = LocalHapticFeedback.current
 
     // Current time state
     var currentTime by remember { mutableStateOf(getCurrentTimeString()) }
+
+    // Custom keyboard visibility
+    var showKeyboard by remember { mutableStateOf(true) }
+
+    // Cursor position for input
+    var cursorPosition by remember { mutableIntStateOf(0) }
 
     // Update time every second
     LaunchedEffect(Unit) {
@@ -131,22 +142,13 @@ fun ShellScreen(
     // Auto-scroll to bottom when new output is added
     LaunchedEffect(uiState.output.size) {
         if (uiState.output.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.output.size - 1)
+            listState.animateScrollToItem(uiState.output.size)
         }
     }
 
-    // Request focus on start
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
-
-    // Keep keyboard open after command execution completes
-    LaunchedEffect(uiState.isExecuting) {
-        if (!uiState.isExecuting) {
-            delay(50) // Small delay to ensure state is settled
-            focusRequester.requestFocus()
-            keyboardController?.show()
-        }
+    // Update cursor position when input changes
+    LaunchedEffect(uiState.input) {
+        cursorPosition = uiState.input.length
     }
 
     // Settings menu state
@@ -181,7 +183,37 @@ fun ShellScreen(
 
     // Settings Dialog
     if (showSettings) {
-        SettingsDialog(onDismiss = { showSettings = false })
+        SettingsDialog(
+            onDismiss = { showSettings = false },
+            shellSettingsManager = viewModel.shellSettingsManager
+        )
+    }
+
+    // Calculator Dialog - must be displayed as overlay
+    val showCalculatorUI by viewModel.showCalculatorUI.collectAsState()
+
+    // Calendar Dialog - must be displayed as overlay
+    val showCalendarUI by viewModel.showCalendarUI.collectAsState()
+
+    // App Picker Dialog
+    val showAppPicker by viewModel.showAppPicker.collectAsState()
+
+    // Navigation events
+    val navigationEvent by viewModel.navigationEvent.collectAsState()
+
+    // Handle navigation events
+    LaunchedEffect(navigationEvent) {
+        when (navigationEvent) {
+            NavigationEvent.MESSAGES -> {
+                onNavigateToMessages()
+                viewModel.clearNavigationEvent()
+            }
+            NavigationEvent.DIALER -> {
+                onNavigateToDialer()
+                viewModel.clearNavigationEvent()
+            }
+            null -> { /* No navigation */ }
+        }
     }
 
 
@@ -236,8 +268,7 @@ fun ShellScreen(
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = {
-                        focusRequester.requestFocus()
-                        keyboardController?.show()
+                        showKeyboard = true
                     }
                 )
             }
@@ -246,57 +277,120 @@ fun ShellScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .navigationBarsPadding()
         ) {
-            // Terminal Header - Fixed at top, not affected by IME
+            // Terminal Header - Fixed at top
             TerminalHeader(
                 onSettingsClick = { showSettings = true },
                 onClearClick = { viewModel.clearHistory() }
             )
 
-            // Terminal Content - Output + Current Input Line (responds to IME)
-            Box(
+            // Terminal Content - Output + Current Input Line
+            LazyColumn(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .imePadding() // Only content area responds to keyboard
+                    .padding(horizontal = 12.dp),
+                state = listState,
+                reverseLayout = false
             ) {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    state = listState
-                ) {
-                    // Output history
-                    items(uiState.output) { entry ->
-                        TerminalOutputEntry(entry)
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
+                // Output history
+                items(uiState.output) { entry ->
+                    TerminalOutputEntry(entry)
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
 
-                    // Current input line (inline like real terminal)
-                    item {
-                        CurrentInputLine(
-                            currentTime = currentTime,
-                            input = uiState.input,
-                            onInputChange = { viewModel.updateInput(it) },
-                            onExecute = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.executeCommand()
-                                // Keep keyboard open after command execution
-                                focusRequester.requestFocus()
-                                keyboardController?.show()
-                            },
-                            isExecuting = uiState.isExecuting,
-                            focusRequester = focusRequester
-                        )
-                    }
-
-                    // Small padding at bottom
-                    item {
-                        Spacer(modifier = Modifier.height(2.dp))
-                    }
+                // Current input line (inline like real terminal)
+                item {
+                    CurrentInputLineCustom(
+                        currentTime = currentTime,
+                        input = uiState.input,
+                        cursorPosition = cursorPosition,
+                        isExecuting = uiState.isExecuting
+                    )
                 }
             }
+
+            // Custom Terminal Keyboard
+            TerminalKeyboard(
+                visible = showKeyboard,
+                onKeyPress = { key ->
+                    val currentInput = uiState.input
+                    val newInput = currentInput.substring(0, cursorPosition) + key + currentInput.substring(cursorPosition)
+                    viewModel.updateInput(newInput)
+                    cursorPosition += key.length
+                },
+                onBackspace = {
+                    if (cursorPosition > 0) {
+                        val currentInput = uiState.input
+                        val newInput = currentInput.substring(0, cursorPosition - 1) + currentInput.substring(cursorPosition)
+                        viewModel.updateInput(newInput)
+                        cursorPosition--
+                    }
+                },
+                onEnter = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.executeCommand()
+                    cursorPosition = 0
+                },
+                onArrowUp = {
+                    // Navigate to previous command in history
+                    viewModel.navigateHistoryUp()
+                },
+                onArrowDown = {
+                    // Navigate to next command in history
+                    viewModel.navigateHistoryDown()
+                },
+                onArrowLeft = {
+                    if (cursorPosition > 0) {
+                        cursorPosition--
+                    }
+                },
+                onArrowRight = {
+                    if (cursorPosition < uiState.input.length) {
+                        cursorPosition++
+                    }
+                },
+                onHome = {
+                    cursorPosition = 0
+                },
+                onEnd = {
+                    cursorPosition = uiState.input.length
+                },
+                onTab = {
+                    // TODO: Auto-complete functionality
+                    viewModel.updateInput(uiState.input + "    ")
+                    cursorPosition += 4
+                },
+                onCtrlC = {
+                    // Cancel current operation
+                    viewModel.cancelOperation()
+                },
+                onClear = {
+                    viewModel.clearHistory()
+                }
+            )
+        }
+
+        // Calculator Dialog Overlay
+        if (showCalculatorUI) {
+            NexusCalculatorModal(
+                onClose = { viewModel.dismissCalculatorUI() }
+            )
+        }
+
+        // Calendar Dialog Overlay
+        if (showCalendarUI) {
+            NexusCalendarModal(
+                onClose = { viewModel.dismissCalendarUI() }
+            )
+        }
+
+        // App Picker Dialog Overlay
+        if (showAppPicker && appCacheService != null) {
+            com.example.mentra.shell.apps.NexusAppPickerModal(
+                appCacheService = appCacheService,
+                onClose = { viewModel.dismissAppPicker() }
+            )
         }
     }
 }
@@ -360,7 +454,7 @@ private fun TerminalHeader(
 
                 Column {
                     Text(
-                        text = "MENTRA SHELL",
+                        text = "Nexus Mentra Shell ",
                         color = TerminalColors.neonGreen,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
@@ -575,8 +669,115 @@ private fun CurrentInputLine(
     }
 }
 
+/**
+ * Custom input line for use with custom keyboard (no system keyboard)
+ * Shows input with cursor at specified position
+ */
 @Composable
-private fun SettingsDialog(onDismiss: () -> Unit) {
+private fun CurrentInputLineCustom(
+    currentTime: String,
+    input: String,
+    cursorPosition: Int,
+    isExecuting: Boolean
+) {
+    // Blinking cursor animation
+    val infiniteTransition = rememberInfiniteTransition(label = "cursor")
+    val cursorAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "cursor_blink"
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Prompt prefix
+        val promptString = buildAnnotatedString {
+            withStyle(SpanStyle(color = TerminalColors.promptUser, fontWeight = FontWeight.Bold)) {
+                append("mentra")
+            }
+            withStyle(SpanStyle(color = TerminalColors.promptSeparator)) {
+                append(" : ")
+            }
+            withStyle(SpanStyle(color = TerminalColors.promptTime)) {
+                append(currentTime)
+            }
+            withStyle(SpanStyle(color = TerminalColors.promptSymbol, fontWeight = FontWeight.Bold)) {
+                append(" $ ")
+            }
+        }
+
+        Text(
+            text = promptString,
+            fontFamily = terminalFont,
+            fontSize = 13.sp
+        )
+
+        // Input with cursor visualization
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Text before cursor
+            val textBeforeCursor = input.take(cursorPosition)
+            val textAfterCursor = input.drop(cursorPosition)
+
+            Text(
+                text = textBeforeCursor,
+                color = TerminalColors.inputText,
+                fontFamily = terminalFont,
+                fontSize = 13.sp
+            )
+
+            // Blinking cursor
+            if (!isExecuting) {
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .height(16.dp)
+                        .alpha(cursorAlpha)
+                        .background(TerminalColors.cursor)
+                )
+            }
+
+            // Text after cursor
+            Text(
+                text = textAfterCursor,
+                color = TerminalColors.inputText,
+                fontFamily = terminalFont,
+                fontSize = 13.sp
+            )
+        }
+
+        // Loading indicator when executing
+        if (isExecuting) {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .size(16.dp)
+                    .padding(start = 8.dp),
+                color = TerminalColors.neonCyan,
+                strokeWidth = 2.dp
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsDialog(
+    onDismiss: () -> Unit,
+    shellSettingsManager: com.example.mentra.shell.settings.ShellSettingsManager? = null
+) {
+    // Get settings from manager or use defaults
+    val inShellIncomingCall by shellSettingsManager?.inShellIncomingCall?.collectAsState()
+        ?: remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = TerminalColors.surface,
@@ -603,14 +804,24 @@ private fun SettingsDialog(onDismiss: () -> Unit) {
             Column(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text(
-                    "Settings will be available in a future update.",
-                    color = TerminalColors.muted,
-                    fontFamily = terminalFont,
-                    fontSize = 13.sp
+                // In-Shell Incoming Call Toggle
+                SettingsToggleItem(
+                    icon = Icons.Default.Phone,
+                    title = "In-Shell Incoming Calls",
+                    subtitle = "Handle incoming calls via shell commands\nA=Answer R=Reject Q=Quick Reply",
+                    checked = inShellIncomingCall,
+                    onCheckedChange = { enabled ->
+                        shellSettingsManager?.setInShellIncomingCall(enabled)
+                    }
                 )
 
-                // Placeholder settings
+                // Divider
+                HorizontalDivider(
+                    color = TerminalColors.muted.copy(alpha = 0.3f),
+                    thickness = 1.dp
+                )
+
+                // Other settings
                 SettingsItem(
                     icon = Icons.Default.Palette,
                     title = "Theme",
@@ -642,6 +853,62 @@ private fun SettingsDialog(onDismiss: () -> Unit) {
             }
         }
     )
+}
+
+@Composable
+private fun SettingsToggleItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = TerminalColors.terminalBg,
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (checked) TerminalColors.neonGreen else TerminalColors.neonPurple,
+                modifier = Modifier.size(24.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = TerminalColors.inputText,
+                    fontFamily = terminalFont,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = subtitle,
+                    color = TerminalColors.muted,
+                    fontFamily = terminalFont,
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp
+                )
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = TerminalColors.neonGreen,
+                    checkedTrackColor = TerminalColors.neonGreen.copy(alpha = 0.3f),
+                    uncheckedThumbColor = TerminalColors.muted,
+                    uncheckedTrackColor = TerminalColors.terminalBg
+                )
+            )
+        }
+    }
 }
 
 @Composable
@@ -709,7 +976,9 @@ class ShellViewModel @Inject constructor(
     private val shellEngine: ShellEngine,
     private val messagingHandler: ShellMessagingCommandHandler,
     private val messagingService: ShellMessagingService,
-    private val callingHandler: com.example.mentra.shell.calling.ShellCallingCommandHandler
+    private val callingHandler: com.example.mentra.shell.calling.ShellCallingCommandHandler,
+    val shellSettingsManager: com.example.mentra.shell.settings.ShellSettingsManager,
+    private val shellIncomingCallHandler: com.example.mentra.shell.calling.ShellIncomingCallHandler
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ShellUiState())
@@ -725,56 +994,169 @@ class ShellViewModel @Inject constructor(
     private val _callingContactPickerRequest = MutableStateFlow<CallingContactPickerRequest?>(null)
     val callingContactPickerRequest: StateFlow<CallingContactPickerRequest?> = _callingContactPickerRequest.asStateFlow()
 
+    // Calculator UI state
+    private val _showCalculatorUI = MutableStateFlow(false)
+    val showCalculatorUI: StateFlow<Boolean> = _showCalculatorUI.asStateFlow()
+
+    // Calendar UI state
+    private val _showCalendarUI = MutableStateFlow(false)
+    val showCalendarUI: StateFlow<Boolean> = _showCalendarUI.asStateFlow()
+
+    // App Picker UI state
+    private val _showAppPicker = MutableStateFlow(false)
+    val showAppPicker: StateFlow<Boolean> = _showAppPicker.asStateFlow()
+
+    // Navigation events
+    private val _navigationEvent = MutableStateFlow<NavigationEvent?>(null)
+    val navigationEvent: StateFlow<NavigationEvent?> = _navigationEvent.asStateFlow()
+
     // Calling state
     val callState = callingHandler.callState
 
     // Active call session for terminal display
     val activeCallSession = callingHandler.activeCallSession
 
+    // Command history for navigation
+    private val commandHistory = mutableListOf<String>()
+    private var historyIndex = -1
+    private var tempInput = "" // Stores current input when navigating history
+
+    fun showCalculator() {
+        _showCalculatorUI.value = true
+    }
+
+    fun dismissCalculatorUI() {
+        _showCalculatorUI.value = false
+    }
+
+    fun showCalendar() {
+        _showCalendarUI.value = true
+    }
+
+    fun dismissCalendarUI() {
+        _showCalendarUI.value = false
+    }
+
+    fun showAppPicker() {
+        _showAppPicker.value = true
+    }
+
+    fun dismissAppPicker() {
+        _showAppPicker.value = false
+    }
+
+    fun navigateToMessages() {
+        _navigationEvent.value = NavigationEvent.MESSAGES
+    }
+
+    fun navigateToDialer() {
+        _navigationEvent.value = NavigationEvent.DIALER
+    }
+
+    fun clearNavigationEvent() {
+        _navigationEvent.value = null
+    }
+
     fun endCall() {
         callingHandler.endActiveCall()
     }
 
+    /**
+     * Navigate to previous command in history (arrow up)
+     */
+    fun navigateHistoryUp() {
+        if (commandHistory.isEmpty()) return
+
+        if (historyIndex == -1) {
+            // Save current input
+            tempInput = _uiState.value.input
+            historyIndex = commandHistory.size - 1
+        } else if (historyIndex > 0) {
+            historyIndex--
+        }
+
+        _uiState.value = _uiState.value.copy(input = commandHistory[historyIndex])
+    }
+
+    /**
+     * Navigate to next command in history (arrow down)
+     */
+    fun navigateHistoryDown() {
+        if (historyIndex == -1) return
+
+        if (historyIndex < commandHistory.size - 1) {
+            historyIndex++
+            _uiState.value = _uiState.value.copy(input = commandHistory[historyIndex])
+        } else {
+            // Return to original input
+            historyIndex = -1
+            _uiState.value = _uiState.value.copy(input = tempInput)
+        }
+    }
+
+    /**
+     * Cancel current operation (Ctrl+C)
+     */
+    fun cancelOperation() {
+        // Always reset messaging and calling handlers regardless of isExecuting state
+        messagingHandler.reset()
+        callingHandler.resetState()
+
+        // Cancel any quick reply in progress
+        val quickReplyOutputs = shellIncomingCallHandler.cancelQuickReply()
+        quickReplyOutputs.forEach { output ->
+            addOutput(OutputItem(
+                command = "^C",
+                timestamp = getCurrentTimeString(),
+                result = ShellResult(
+                    status = com.example.mentra.shell.models.ResultStatus.SUCCESS,
+                    message = output.text
+                )
+            ))
+        }
+
+        // Dismiss any open contact pickers
+        _contactPickerRequest.value = null
+        _callingContactPickerRequest.value = null
+
+        if (_uiState.value.isExecuting) {
+            _uiState.value = _uiState.value.copy(isExecuting = false, input = "")
+            addOutput(OutputItem(
+                command = "^C",
+                timestamp = getCurrentTimeString(),
+                result = ShellResult(
+                    status = com.example.mentra.shell.models.ResultStatus.FAILURE,
+                    message = "Operation cancelled"
+                )
+            ))
+        } else {
+            // Check if there's an active conversation state that needs cancellation
+            val conversationState = messagingHandler.conversationState.value
+            val callingState = callingHandler.callState.value
+
+            if (conversationState != com.example.mentra.shell.messaging.ConversationState.None ||
+                callingState != com.example.mentra.shell.calling.CallState.Idle) {
+                // Show cancellation message
+                addOutput(OutputItem(
+                    command = "^C",
+                    timestamp = getCurrentTimeString(),
+                    result = ShellResult(
+                        status = com.example.mentra.shell.models.ResultStatus.SUCCESS,
+                        message = "Operation cancelled"
+                    )
+                ))
+            }
+            // Clear current input
+            _uiState.value = _uiState.value.copy(input = "")
+        }
+        historyIndex = -1
+    }
+
+    // Shell incoming call state
+    val shellIncomingCallState = shellIncomingCallHandler.shellCallState
+
     init {
-        // Add welcome message
-        addOutput(OutputItem(
-            command = "welcome",
-            timestamp = getCurrentTimeString(),
-            result = ShellResult(
-                status = com.example.mentra.shell.models.ResultStatus.SUCCESS,
-                message = """
-╔══════════════════════════════════════════════════════════════╗
-║           MENTRA AI SHELL v1.0                               ║
-║           Next-Generation Android Terminal                   ║
-╚══════════════════════════════════════════════════════════════╝
-
-Type 'help' for all commands, or use these quick actions:
-
-📨 MESSAGING (SMS):
-   • send my wife a message    - Send SMS to alias
-   • text mom hello            - Quick message with content
-   • sms 0712345678 hi         - Direct SMS to number
-   • send a message            - Interactive prompt
-   • alias wife = Jane         - Set up contact alias
-
-📞 CALLING:
-   • call my wife              - Call alias
-   • call 0712345678           - Direct dial
-   • dial +254712345678        - International format
-   • make a call               - Interactive prompt
-
-💰 USSD SHORTCUTS:
-   • check balance             - *144# balance check
-   • check balance on sim 1    - Specific SIM
-   • check data                - Data balance
-   • my number                 - *135# your number
-   • equity / kcb / coop       - Bank USSD codes
-
-🔧 SYSTEM:
-   • status • sysinfo • clear • help
-                """.trimIndent()
-            )
-        ))
+        // Shell starts empty - users can type 'help' for commands
 
         // Observe contact picker requests from messaging handler
         viewModelScope.launch {
@@ -794,6 +1176,47 @@ Type 'help' for all commands, or use these quick actions:
                         title = "Select Contact to Call"
                     )
                     loadContacts()
+                }
+            }
+        }
+
+        // Observe call ended events (when other party ends call)
+        viewModelScope.launch {
+            callingHandler.callEndedEvent.collect { callInfo ->
+                // Add call ended message to shell output
+                addOutput(OutputItem(
+                    command = "",
+                    timestamp = getCurrentTimeString(),
+                    result = ShellResult(
+                        status = com.example.mentra.shell.models.ResultStatus.SUCCESS,
+                        message = "📵 Call ended by ${callInfo.endedBy}: ${callInfo.contactName ?: callInfo.phoneNumber} [${callInfo.duration}]"
+                    )
+                ))
+            }
+        }
+
+        // Observe shell incoming call state changes
+        viewModelScope.launch {
+            shellIncomingCallHandler.shellCallState.collect { state ->
+                // Display incoming call notification in shell if enabled
+                if (shellIncomingCallHandler.isShellIncomingCallEnabled()) {
+                    val outputs = shellIncomingCallHandler.getCallStateDisplay()
+                    outputs.forEach { output ->
+                        addOutput(OutputItem(
+                            command = "",
+                            timestamp = getCurrentTimeString(),
+                            result = ShellResult(
+                                status = when (output.type) {
+                                    com.example.mentra.shell.models.ShellOutputType.SUCCESS -> com.example.mentra.shell.models.ResultStatus.SUCCESS
+                                    com.example.mentra.shell.models.ShellOutputType.ERROR -> com.example.mentra.shell.models.ResultStatus.FAILURE
+                                    com.example.mentra.shell.models.ShellOutputType.WARNING -> com.example.mentra.shell.models.ResultStatus.INVALID_COMMAND
+                                    com.example.mentra.shell.models.ShellOutputType.PROMPT -> com.example.mentra.shell.models.ResultStatus.REQUIRES_CONFIRMATION
+                                    else -> com.example.mentra.shell.models.ResultStatus.SUCCESS
+                                },
+                                message = output.text
+                            )
+                        ))
+                    }
                 }
             }
         }
@@ -939,6 +1362,16 @@ Type 'help' for all commands, or use these quick actions:
         val command = _uiState.value.input.trim()
         if (command.isEmpty()) return
 
+        // Add to command history (avoid duplicates of last command)
+        if (commandHistory.isEmpty() || commandHistory.last() != command) {
+            commandHistory.add(command)
+            // Keep history size reasonable
+            if (commandHistory.size > 1000) {
+                commandHistory.removeAt(0)
+            }
+        }
+        historyIndex = -1 // Reset history navigation
+
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isExecuting = true)
 
@@ -951,6 +1384,34 @@ Type 'help' for all commands, or use these quick actions:
                 }
 
                 val timestamp = getCurrentTimeString()
+
+                // ═══════════════════════════════════════════════════════════════
+                // PRIORITY 1: Check if we have an active shell incoming call
+                // If in-shell incoming call is enabled, handle A/R/Q commands
+                // ═══════════════════════════════════════════════════════════════
+                if (shellIncomingCallHandler.hasActiveIncomingCall()) {
+                    val (handled, outputs) = shellIncomingCallHandler.handleCallInput(command)
+                    if (handled) {
+                        outputs.forEach { output ->
+                            addOutput(OutputItem(
+                                command = if (outputs.indexOf(output) == 0) command else "",
+                                timestamp = timestamp,
+                                result = ShellResult(
+                                    status = when (output.type) {
+                                        com.example.mentra.shell.models.ShellOutputType.SUCCESS -> com.example.mentra.shell.models.ResultStatus.SUCCESS
+                                        com.example.mentra.shell.models.ShellOutputType.ERROR -> com.example.mentra.shell.models.ResultStatus.FAILURE
+                                        com.example.mentra.shell.models.ShellOutputType.WARNING -> com.example.mentra.shell.models.ResultStatus.INVALID_COMMAND
+                                        com.example.mentra.shell.models.ShellOutputType.PROMPT -> com.example.mentra.shell.models.ResultStatus.REQUIRES_CONFIRMATION
+                                        else -> com.example.mentra.shell.models.ResultStatus.SUCCESS
+                                    },
+                                    message = output.text
+                                )
+                            ))
+                        }
+                        _uiState.value = _uiState.value.copy(input = "", isExecuting = false)
+                        return@launch
+                    }
+                }
 
                 // Check if we're in an active call (for call control) - must have BOTH InCall state AND active session
                 val isInActiveCall = callState.value is com.example.mentra.shell.calling.CallState.InCall &&
@@ -1040,6 +1501,39 @@ Type 'help' for all commands, or use these quick actions:
                     // Regular shell command
                     val result = shellEngine.execute(command)
 
+                    // Check if calculator UI should be shown
+                    if (result.data == "SHOW_CALCULATOR_UI") {
+                        showCalculator()
+                    }
+
+                    // Check if calendar UI should be shown
+                    if (result.data == "SHOW_CALENDAR_UI") {
+                        showCalendar()
+                    }
+
+                    // Check if app picker should be shown
+                    if (result.data == "show_app_picker") {
+                        showAppPicker()
+                        _uiState.value = _uiState.value.copy(input = "")
+                        _uiState.value = _uiState.value.copy(isExecuting = false)
+                        return@launch
+                    }
+
+                    // Check for navigation commands
+                    if (result.data == "navigate_messages") {
+                        navigateToMessages()
+                        _uiState.value = _uiState.value.copy(input = "")
+                        _uiState.value = _uiState.value.copy(isExecuting = false)
+                        return@launch
+                    }
+
+                    if (result.data == "navigate_dialer") {
+                        navigateToDialer()
+                        _uiState.value = _uiState.value.copy(input = "")
+                        _uiState.value = _uiState.value.copy(isExecuting = false)
+                        return@launch
+                    }
+
                     addOutput(OutputItem(
                         command = command,
                         timestamp = timestamp,
@@ -1091,3 +1585,12 @@ data class OutputItem(
 data class CallingContactPickerRequest(
     val title: String = "Select Contact to Call"
 )
+
+/**
+ * Navigation events from shell
+ */
+enum class NavigationEvent {
+    MESSAGES,
+    DIALER
+}
+

@@ -223,5 +223,6 @@ enum class ShellOutputType {
     WARNING,     // Yellow - warning message
     INFO,        // White/Gray - information
     PROMPT,      // Cyan - user prompt
-    COMMAND      // Blue - command echo
+    COMMAND,     // Blue - command echo
+    HEADER       // Bold/highlighted - section header
 }

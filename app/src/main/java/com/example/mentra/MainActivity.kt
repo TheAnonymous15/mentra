@@ -14,9 +14,11 @@ import com.example.mentra.messaging.MessagePreloader
 import com.example.mentra.messaging.ui.ConversationScreen
 import com.example.mentra.messaging.ui.MessagingScreen
 import com.example.mentra.navigation.ui.NavigationScreen
+import com.example.mentra.navigation.ui.NexusNavigationScreen
 import com.example.mentra.ui.home.HomeScreen
 import com.example.mentra.ui.permissions.PermissionSetupScreen
 import com.example.mentra.shell.ui.ShellScreen
+import com.example.mentra.shell.apps.AppCacheService
 import com.example.mentra.ui.theme.MentraTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -30,6 +32,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var messagePreloader: MessagePreloader
 
+    @Inject
+    lateinit var appCacheService: AppCacheService
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -37,11 +42,19 @@ class MainActivity : ComponentActivity() {
         // Start preloading messages in background
         messagePreloader.startPreloading()
 
+        // Initialize app cache
+        appCacheService.initialize()
+
+        // Get initial screen from intent (used by LauncherActivity)
+        val initialScreen = intent.getStringExtra("navigate_to") ?: "home"
+
         setContent {
             MentraTheme {
                 MentraApp(
                     permissionManager = permissionManager,
-                    messagePreloader = messagePreloader
+                    messagePreloader = messagePreloader,
+                    appCacheService = appCacheService,
+                    initialScreen = initialScreen
                 )
             }
         }
@@ -51,11 +64,13 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MentraApp(
     permissionManager: PermissionManager,
-    messagePreloader: MessagePreloader
+    messagePreloader: MessagePreloader,
+    appCacheService: AppCacheService,
+    initialScreen: String = "home"
 ) {
     val setupComplete by permissionManager.setupComplete.collectAsState()
     var showPermissionScreen by remember { mutableStateOf(!setupComplete) }
-    var currentScreen by remember { mutableStateOf("home") }
+    var currentScreen by remember { mutableStateOf(initialScreen) }
     var conversationPhoneNumber by remember { mutableStateOf<String?>(null) }
 
     // Update when permissions change
@@ -88,13 +103,19 @@ fun MentraApp(
             )
         }
         currentScreen == "shell" -> {
-            ShellScreen()
+            ShellScreen(
+                onNavigateToMessages = { currentScreen = "messaging" },
+                onNavigateToDialer = { currentScreen = "dialer" },
+                appCacheService = appCacheService
+            )
         }
         currentScreen == "health" -> {
             HealthScreen()
         }
         currentScreen == "navigation" -> {
-            NavigationScreen()
+            NexusNavigationScreen(
+                onClose = { currentScreen = "home" }
+            )
         }
         currentScreen == "messaging" -> {
             MessagingScreen(

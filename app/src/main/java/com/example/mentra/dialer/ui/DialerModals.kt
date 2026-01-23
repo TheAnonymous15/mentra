@@ -1,9 +1,7 @@
 package com.example.mentra.dialer.ui
 
-import android.graphics.ImageDecoder
 import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
+import android.provider.ContactsContract
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -45,6 +43,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.mentra.dialer.CallLogEntry
 import com.example.mentra.dialer.CallType
 import com.example.mentra.dialer.SimAccount
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * NEXUS DIALER - Modals
@@ -67,25 +67,56 @@ fun SimSelectionModal(
     val context = LocalContext.current
     val infiniteTransition = rememberInfiniteTransition(label = "simModal")
 
-    // Load contact photo if available
-    val contactBitmap = remember(contactPhotoUri) {
-        if (contactPhotoUri != null) {
-            try {
-                val uri = Uri.parse(contactPhotoUri)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    val source = ImageDecoder.createSource(context.contentResolver, uri)
-                    ImageDecoder.decodeBitmap(source)
-                } else {
-                    @Suppress("DEPRECATION")
-                    MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+    // Load contact photo - try provided URI first, then look up by phone number
+    var contactBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    LaunchedEffect(contactPhotoUri, phoneNumber) {
+        contactBitmap = withContext(Dispatchers.IO) {
+            // First try the provided photo URI
+            if (contactPhotoUri != null) {
+                try {
+                    val uri = Uri.parse(contactPhotoUri)
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        android.graphics.BitmapFactory.decodeStream(inputStream)
+                    }
+                } catch (e: Exception) {
+                    null
                 }
-            } catch (e: Exception) {
-                null
+            } else {
+                // Try to look up contact photo by phone number
+                try {
+                    val contactUri = Uri.withAppendedPath(
+                        ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                        Uri.encode(phoneNumber)
+                    )
+                    context.contentResolver.query(
+                        contactUri,
+                        arrayOf(ContactsContract.PhoneLookup.PHOTO_URI),
+                        null,
+                        null,
+                        null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val photoUriStr = cursor.getString(
+                                cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.PHOTO_URI)
+                            )
+                            if (photoUriStr != null) {
+                                val photoUri = Uri.parse(photoUriStr)
+                                context.contentResolver.openInputStream(photoUri)?.use { inputStream ->
+                                    android.graphics.BitmapFactory.decodeStream(inputStream)
+                                }
+                            } else null
+                        } else null
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    null
+                }
             }
-        } else null
+        }
     }
 
-    // Rotating ring animation
+    // Rotating ring animation for avatar border
     val ringRotation by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
@@ -130,90 +161,37 @@ fun SimSelectionModal(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Contact info row with photo
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    // Contact avatar with animated ring
+                    Box(
+                        modifier = Modifier.size(64.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        // Left side: SIM icon with animation
-                        Box(
-                            modifier = Modifier.size(44.dp),
-                            contentAlignment = Alignment.Center
+                        // Rotating outer ring
+                        Canvas(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .rotate(ringRotation)
                         ) {
-                            // Rotating outer ring
-                            Canvas(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .rotate(ringRotation)
-                            ) {
-                                drawArc(
-                                    brush = Brush.sweepGradient(
-                                        listOf(
-                                            NexusDialerColors.primary,
-                                            NexusDialerColors.secondary,
-                                            Color.Transparent,
-                                            NexusDialerColors.primary
-                                        )
-                                    ),
-                                    startAngle = 0f,
-                                    sweepAngle = 270f,
-                                    useCenter = false,
-                                    style = Stroke(width = 2.dp.toPx())
-                                )
-                            }
-
-                            // Inner icon
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .background(
-                                        brush = Brush.linearGradient(
-                                            listOf(
-                                                NexusDialerColors.primary,
-                                                NexusDialerColors.secondary
-                                            )
-                                        ),
-                                        shape = CircleShape
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.SimCard,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-
-                        // Center: Contact info
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            if (contactName != null) {
-                                Text(
-                                    contactName,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = NexusDialerColors.textPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Text(
-                                phoneNumber,
-                                fontSize = 12.sp,
-                                color = NexusDialerColors.primary,
-                                fontWeight = FontWeight.Medium
+                            drawArc(
+                                brush = Brush.sweepGradient(
+                                    listOf(
+                                        NexusDialerColors.primary,
+                                        NexusDialerColors.secondary,
+                                        Color.Transparent,
+                                        NexusDialerColors.primary
+                                    )
+                                ),
+                                startAngle = 0f,
+                                sweepAngle = 270f,
+                                useCenter = false,
+                                style = Stroke(width = 2.dp.toPx())
                             )
                         }
 
-                        // Right side: Contact photo (if available)
+                        // Contact photo or initial
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
+                                .size(52.dp)
                                 .clip(CircleShape)
                                 .background(
                                     brush = Brush.linearGradient(
@@ -222,19 +200,13 @@ fun SimSelectionModal(
                                             NexusDialerColors.secondary.copy(alpha = 0.3f)
                                         )
                                     )
-                                )
-                                .border(
-                                    width = 2.dp,
-                                    brush = Brush.linearGradient(
-                                        listOf(NexusDialerColors.primary, NexusDialerColors.secondary)
-                                    ),
-                                    shape = CircleShape
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            if (contactBitmap != null) {
+                            val bitmap = contactBitmap
+                            if (bitmap != null) {
                                 Image(
-                                    bitmap = contactBitmap.asImageBitmap(),
+                                    bitmap = bitmap.asImageBitmap(),
                                     contentDescription = "Contact Photo",
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -242,16 +214,49 @@ fun SimSelectionModal(
                                     contentScale = ContentScale.Crop
                                 )
                             } else {
-                                // Show initial or icon
-                                Text(
-                                    contactName?.firstOrNull()?.uppercase()?.toString() ?: "#",
-                                    color = NexusDialerColors.primary,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                // Show initial letter or icon
+                                if (contactName != null) {
+                                    Text(
+                                        contactName.firstOrNull()?.uppercase()?.toString() ?: "#",
+                                        color = NexusDialerColors.primary,
+                                        fontSize = 22.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = NexusDialerColors.primary,
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
                             }
                         }
                     }
+
+                    // Contact info - compact
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        if (contactName != null) {
+                            Text(
+                                contactName,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = NexusDialerColors.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            phoneNumber,
+                            fontSize = 13.sp,
+                            color = NexusDialerColors.primary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
 
                     // SIM cards in single card container
                     Surface(
@@ -260,74 +265,86 @@ fun SimSelectionModal(
                         color = NexusDialerColors.cardGlass.copy(alpha = 0.3f),
                         border = BorderStroke(1.dp, NexusDialerColors.textMuted.copy(alpha = 0.15f))
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            sims.forEachIndexed { index, sim ->
-                                val simColor = if (index == 0) NexusDialerColors.simBlue else NexusDialerColors.simPurple
-                                val interactionSource = remember { MutableInteractionSource() }
-                                val isPressed by interactionSource.collectIsPressedAsState()
-                                val scale by animateFloatAsState(
-                                    targetValue = if (isPressed) 0.95f else 1f,
-                                    animationSpec = spring(dampingRatio = 0.5f),
-                                    label = "scale"
-                                )
+                            // "Select SIM" label
+                            Text(
+                                "Select SIM",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = NexusDialerColors.textMuted,
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            )
 
-                                Surface(
-                                    onClick = { onSimSelected(sim.slotIndex) },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .scale(scale),
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = simColor.copy(alpha = 0.1f),
-                                    border = BorderStroke(1.dp, simColor.copy(alpha = 0.3f)),
-                                    interactionSource = interactionSource
-                                ) {
-                                    Column(
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                sims.forEachIndexed { index, sim ->
+                                    val simColor = if (index == 0) NexusDialerColors.simBlue else NexusDialerColors.simPurple
+                                    val interactionSource = remember { MutableInteractionSource() }
+                                    val isPressed by interactionSource.collectIsPressedAsState()
+                                    val scale by animateFloatAsState(
+                                        targetValue = if (isPressed) 0.95f else 1f,
+                                        animationSpec = spring(dampingRatio = 0.5f),
+                                        label = "scale"
+                                    )
+
+                                    Surface(
+                                        onClick = { onSimSelected(sim.slotIndex) },
                                         modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(12.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            .weight(1f)
+                                            .scale(scale),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = simColor.copy(alpha = 0.1f),
+                                        border = BorderStroke(1.dp, simColor.copy(alpha = 0.3f)),
+                                        interactionSource = interactionSource
                                     ) {
-                                        // SIM number badge
-                                        Box(
+                                        Column(
                                             modifier = Modifier
-                                                .size(32.dp)
-                                                .background(
-                                                    simColor.copy(alpha = 0.2f),
-                                                    RoundedCornerShape(8.dp)
-                                                ),
-                                            contentAlignment = Alignment.Center
+                                                .fillMaxWidth()
+                                                .padding(8.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
+                                            // SIM number badge - smaller
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .background(
+                                                        simColor.copy(alpha = 0.2f),
+                                                        RoundedCornerShape(6.dp)
+                                                    ),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    "${index + 1}",
+                                                    color = simColor,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+
+                                            // SIM label - smaller
                                             Text(
-                                                "${index + 1}",
+                                                "SIM ${index + 1}",
+                                                color = NexusDialerColors.textPrimary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+
+                                            // Network/Carrier - smaller
+                                            Text(
+                                                sim.carrierName.ifEmpty { "Unknown" },
                                                 color = simColor,
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Bold
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
-
-                                        // SIM label
-                                        Text(
-                                            "SIM ${index + 1}",
-                                            color = NexusDialerColors.textPrimary,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-
-                                        // Network/Carrier
-                                        Text(
-                                            sim.carrierName.ifEmpty { "Unknown" },
-                                            color = simColor,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
                                     }
                                 }
                             }
@@ -747,6 +764,212 @@ fun QuickMessageModal(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Send Message", fontWeight = FontWeight.Medium)
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NEXUS SIM SELECTION MODAL (Simple - for placing calls from other screens)
+// ═══════════════════════════════════════════════════════════════════
+
+@Composable
+fun NexusSimSelectionModal(
+    phoneNumber: String,
+    contactName: String? = null,
+    availableSims: List<SimInfo>,
+    onDismiss: () -> Unit,
+    onSimSelected: (Int) -> Unit
+) {
+    val haptics = LocalHapticFeedback.current
+    val infiniteTransition = rememberInfiniteTransition(label = "simSelect")
+    
+    val glowPulse by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = EaseInOutSine),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glow"
+    )
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.85f))
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            // Main card
+            Card(
+                modifier = Modifier
+                    .padding(32.dp)
+                    .widthIn(max = 320.dp)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { /* Prevent dismiss on card click */ },
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF0A1520)
+                ),
+                border = BorderStroke(
+                    1.dp,
+                    Brush.linearGradient(
+                        colors = listOf(
+                            NexusDialerColors.secondary.copy(alpha = glowPulse),
+                            NexusDialerColors.accent.copy(alpha = glowPulse * 0.5f),
+                            NexusDialerColors.secondary.copy(alpha = glowPulse)
+                        )
+                    )
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Phone icon
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .background(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        NexusDialerColors.secondary.copy(alpha = 0.3f),
+                                        Color.Transparent
+                                    )
+                                ),
+                                shape = CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Phone,
+                            contentDescription = null,
+                            tint = NexusDialerColors.secondary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Contact info
+                    Text(
+                        text = contactName ?: phoneNumber,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    
+                    if (contactName != null) {
+                        Text(
+                            text = phoneNumber,
+                            fontSize = 14.sp,
+                            color = NexusDialerColors.textMuted
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Text(
+                        text = "Select SIM",
+                        fontSize = 12.sp,
+                        color = NexusDialerColors.textMuted,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // SIM buttons
+                    if (availableSims.size == 1) {
+                        // Single SIM - just show call button
+                        Button(
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSimSelected(availableSims[0].slotIndex)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = NexusDialerColors.secondary
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Icon(Icons.Default.Call, null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Call",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    } else {
+                        // Multiple SIMs
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            availableSims.forEach { sim ->
+                                val simColor = if (sim.slotIndex == 0) 
+                                    NexusDialerColors.secondary else NexusDialerColors.accent
+                                
+                                Button(
+                                    onClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onSimSelected(sim.slotIndex)
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(72.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = simColor.copy(alpha = 0.15f)
+                                    ),
+                                    border = BorderStroke(1.dp, simColor.copy(alpha = 0.5f)),
+                                    shape = RoundedCornerShape(16.dp)
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = "SIM ${sim.slotIndex + 1}",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = simColor
+                                        )
+                                        Text(
+                                            text = sim.carrierName.take(10),
+                                            fontSize = 11.sp,
+                                            color = NexusDialerColors.textMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Cancel button
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Cancel",
+                            color = NexusDialerColors.textMuted
+                        )
                     }
                 }
             }

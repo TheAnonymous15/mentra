@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.*
@@ -90,7 +91,7 @@ fun NexusCallModal(
     onEndCall: () -> Unit
 ) {
     val context = LocalContext.current
-    val dialerManager = remember { com.example.mentra.dialer.DialerManager(context) }
+    val dialerManager = remember { com.example.mentra.dialer.DialerManagerProvider.getDialerManager() }
 
     var modalState by remember { mutableStateOf(CallModalState.SIM_SELECTION) }
     var selectedSim by remember { mutableStateOf(-1) }
@@ -99,22 +100,25 @@ fun NexusCallModal(
     var isSpeaker by remember { mutableStateOf(false) }
     var showDialpad by remember { mutableStateOf(false) }
 
+    // Observe call cost from DialerManager for outgoing calls
+    val callCost by dialerManager?.totalCallCost?.collectAsState() ?: remember { mutableStateOf(0.0) }
+
     // Function to send DTMF to the active call
     fun sendDtmf(digit: Char) {
         // Send DTMF through DialerManager which sends to the active call
-        dialerManager.sendDtmf(digit)
+        dialerManager?.sendDtmf(digit)
     }
 
     // Function to toggle mute
     fun toggleMute() {
         isMuted = !isMuted
-        dialerManager.toggleMute()
+        dialerManager?.toggleMute()
     }
 
     // Function to toggle speaker
     fun toggleSpeaker() {
         isSpeaker = !isSpeaker
-        dialerManager.toggleSpeaker()
+        dialerManager?.toggleSpeaker()
     }
 
     // Cleanup when modal is dismissed
@@ -122,10 +126,10 @@ fun NexusCallModal(
         onDispose {
             // Reset audio state through DialerManager
             if (isSpeaker) {
-                dialerManager.toggleSpeaker()
+                dialerManager?.toggleSpeaker()
             }
             if (isMuted) {
-                dialerManager.toggleMute()
+                dialerManager?.toggleMute()
             }
         }
     }
@@ -217,6 +221,7 @@ fun NexusCallModal(
                         ConnectedCallModal(
                             data = data,
                             duration = callDuration,
+                            callCost = callCost,
                             isMuted = isMuted,
                             isSpeaker = isSpeaker,
                             showDialpad = showDialpad,
@@ -226,10 +231,10 @@ fun NexusCallModal(
                             onEndCall = {
                                 // Reset audio state before ending using dialerManager
                                 if (isSpeaker) {
-                                    dialerManager.toggleSpeaker()
+                                    dialerManager?.toggleSpeaker()
                                 }
                                 if (isMuted) {
-                                    dialerManager.toggleMute()
+                                    dialerManager?.toggleMute()
                                 }
                                 onEndCall()
                                 modalState = CallModalState.ENDED
@@ -471,6 +476,7 @@ private fun CallingModal(
 private fun ConnectedCallModal(
     data: CallModalData,
     duration: Long,
+    callCost: Double = 0.0,
     isMuted: Boolean,
     isSpeaker: Boolean,
     showDialpad: Boolean,
@@ -526,6 +532,16 @@ private fun ConnectedCallModal(
                     color = NexusCallColors.primary,
                     letterSpacing = 2.sp
                 )
+
+                // Call cost (for outgoing calls)
+                if (callCost > 0) {
+                    Text(
+                        text = "KSH %.2f".format(callCost),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = NexusCallColors.textSecondary
+                    )
+                }
             }
 
             // Dialpad or controls

@@ -1,7 +1,16 @@
 package com.example.mentra.shell.core
 
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.drawable.Drawable
 import com.example.mentra.shell.actions.ActionRouter
+import com.example.mentra.shell.apps.AppCacheService
+import com.example.mentra.shell.apps.CacheState
+import com.example.mentra.shell.apps.LaunchResult
+import com.example.mentra.shell.calculator.ShellCalculator
 import com.example.mentra.shell.models.*
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.withTimeout
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -12,9 +21,12 @@ import javax.inject.Singleton
  */
 @Singleton
 class CommandExecutor @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val parser: CommandParser,
     private val contextManager: ContextManager,
-    private val actionRouter: ActionRouter
+    private val actionRouter: ActionRouter,
+    private val appCacheService: AppCacheService,
+    private val calculator: ShellCalculator
 ) {
 
     /**
@@ -33,20 +45,21 @@ class CommandExecutor @Inject constructor(
             // Add to history
             contextManager.addToHistory(command)
 
-            // Validate command
+            // Handle built-in shell commands FIRST (before validation)
+            // This allows special commands like 'sms --ui' to bypass strict validation
+            val builtInResult = handleBuiltInCommands(command)
+            if (builtInResult != null) {
+                contextManager.updateLastResult(builtInResult)
+                return builtInResult
+            }
+
+            // Validate command (only for non-built-in commands)
             if (!parser.validate(command)) {
                 return ShellResult(
                     status = ResultStatus.INVALID_COMMAND,
                     message = "Invalid command syntax",
                     executionTime = System.currentTimeMillis() - startTime
                 )
-            }
-
-            // Handle built-in shell commands
-            val builtInResult = handleBuiltInCommands(command)
-            if (builtInResult != null) {
-                contextManager.updateLastResult(builtInResult)
-                return builtInResult
             }
 
             // Convert to action
@@ -101,6 +114,102 @@ class CommandExecutor @Inject constructor(
      * Handle built-in shell commands (cd, ls, history, etc.)
      */
     private fun handleBuiltInCommands(command: ShellCommand): ShellResult? {
+        // First check for multi-word commands
+        val rawLower = command.raw.lowercase().trim()
+
+        // Handle calendar UI trigger
+        if (rawLower == "calendar" || rawLower == "cal" || rawLower == "date") {
+            return ShellResult(
+                status = ResultStatus.SUCCESS,
+                message = "Opening Calendar...",
+                data = "SHOW_CALENDAR_UI"  // Signal to show calendar UI
+            )
+        }
+
+        // Handle calculator UI trigger (just "calc" or "calculator")
+        if (calculator.shouldShowUI(command.raw)) {
+            return ShellResult(
+                status = ResultStatus.SUCCESS,
+                message = "Opening Calculator...",
+                data = "SHOW_CALCULATOR_UI"  // Signal to show calculator UI
+            )
+        }
+
+        // Handle calculator commands with expressions (calc 2+2)
+        if (calculator.isCalculatorCommand(command.raw)) {
+            val outputs = calculator.handleCommand(command.raw)
+            return ShellResult(
+                status = ResultStatus.SUCCESS,
+                message = outputs.joinToString("\n") { it.text },
+                data = outputs
+            )
+        }
+
+        // Auto-detect math expressions (e.g., 1+1, sqrt(144), 2^10)
+        if (calculator.isMathExpression(command.raw)) {
+            val outputs = calculator.evaluate(command.raw)
+            return ShellResult(
+                status = ResultStatus.SUCCESS,
+                message = outputs.joinToString("\n") { it.text },
+                data = outputs
+            )
+        }
+
+        // Handle "list apps", "show apps", "apps", "app" commands
+        if (rawLower == "apps" || rawLower == "app" || rawLower == "list apps" || rawLower == "show apps" ||
+            rawLower.startsWith("apps ") || rawLower.startsWith("app ") ||
+            rawLower.startsWith("list apps ") || rawLower.startsWith("show apps ")) {
+            val filter = when {
+                rawLower.startsWith("list apps ") -> rawLower.removePrefix("list apps ").trim()
+                rawLower.startsWith("show apps ") -> rawLower.removePrefix("show apps ").trim()
+                rawLower.startsWith("apps ") -> rawLower.removePrefix("apps ").trim()
+                rawLower.startsWith("app ") -> rawLower.removePrefix("app ").trim()
+                else -> null
+            }
+            // Check for --ui flag
+            if (filter?.contains("--ui") == true) {
+                return ShellResult(
+                    status = ResultStatus.SUCCESS,
+                    message = "SHOW_APP_PICKER",
+                    data = "show_app_picker"
+                )
+            }
+            return handleListApps(filter)
+        }
+
+        // Handle "sms --ui", "messages --ui" to open messaging UI
+        if (rawLower == "sms --ui" || rawLower == "messages --ui" ||
+            rawLower == "open messages" || rawLower == "open sms") {
+            return ShellResult(
+                status = ResultStatus.SUCCESS,
+                message = "NAVIGATE_MESSAGES",
+                data = "navigate_messages"
+            )
+        }
+
+        // Handle "dialer", "phone", "dial" UI commands
+        if (rawLower == "dialer" || rawLower == "phone" || rawLower == "dialer --ui" ||
+            rawLower == "open dialer" || rawLower == "open phone") {
+            return ShellResult(
+                status = ResultStatus.SUCCESS,
+                message = "NAVIGATE_DIALER",
+                data = "navigate_dialer"
+            )
+        }
+
+        // Handle "open", "launch", "start" app commands
+        if (rawLower.startsWith("open ") || rawLower.startsWith("launch ") || rawLower.startsWith("start ")) {
+            val appName = when {
+                rawLower.startsWith("open ") -> command.raw.substring(5).trim()
+                rawLower.startsWith("launch ") -> command.raw.substring(7).trim()
+                rawLower.startsWith("start ") -> command.raw.substring(6).trim()
+                else -> ""
+            }
+            if (appName.isNotEmpty()) {
+                return handleOpenApp(appName)
+            }
+        }
+
         return when (command.verb.lowercase()) {
             "cd" -> {
                 val path = command.target ?: "/"
@@ -268,18 +377,42 @@ class CommandExecutor @Inject constructor(
                     show device       Device information
                     show time         Current time
                     show date         Current date
+                    
+                    ═══════════════════════════════════════
+                    CALCULATOR:
+                    ═══════════════════════════════════════
+                    calc <expr>       Calculate expression
+                    1+1               Auto-detect math
+                    calc sqrt(144)    Functions supported
+                    calc 2^10         Power operations
+                    calc 17 mod 5     Modulo operations
+                    calc pi * 2       Constants: pi, e
                     show steps        Step count today
                     sysinfo           Complete system info
                     
                     ═══════════════════════════════════════
                     APP CONTROL:
                     ═══════════════════════════════════════
+                    apps              List installed apps
+                    apps --ui         Show app picker UI
+                    apps --all        List all apps (user + system)
+                    apps --system     List system apps only
+                    apps [search]     Search apps by name
+                    list apps         Same as 'apps'
+                    show apps         Same as 'apps'
                     open <app>        Open application
                     settings [type]   Open settings (wifi/bluetooth/etc)
                     freeze <pkg>      Freeze/disable app (Shizuku)
                     unfreeze <pkg>    Unfreeze app (Shizuku)
                     hide <pkg>        Hide app from launcher (Shizuku)
                     unhide <pkg>      Unhide app (Shizuku)
+                    
+                    ═══════════════════════════════════════
+                    NAVIGATION:
+                    ═══════════════════════════════════════
+                    sms --ui          Open messaging UI
+                    dialer            Open dialer/phone UI
+                    phone             Same as 'dialer'
                     
                     ═══════════════════════════════════════
                     PERFORMANCE (Requires Shizuku):
@@ -290,10 +423,30 @@ class CommandExecutor @Inject constructor(
                     clearcache        Clear all app caches
                     
                     ═══════════════════════════════════════
-                    COMMUNICATION:
+                    MESSAGING:
                     ═══════════════════════════════════════
-                    call <number>     Open dialer
-                    message <number> "text"   Send SMS
+                    inbox             View recent messages
+                    inbox [name]      Open contact's inbox
+                    inbox [name] [n]  Show last n messages
+                                      e.g: inbox mpesa 5
+                    unread            Show unread count
+                    read [contact]    Read conversation
+                    chat [contact]    Same as read
+                    reply [message]   Quick reply to open chat
+                    
+                    message [contact] [text]  Send message
+                    text [contact] [text]     Send message  
+                    sms [number] [text]       Send to number
+                    
+                    alias [name] [contact]    Set contact alias
+                    Example: alias wife Jane Doe
+                    
+                    ═══════════════════════════════════════
+                    CALLING:
+                    ═══════════════════════════════════════
+                    call <number>     Make a call
+                    call [alias]      Call using alias
+                    dial <number>     Open dialer
                     
                     ═══════════════════════════════════════
                     FILE OPERATIONS:
@@ -319,7 +472,7 @@ class CommandExecutor @Inject constructor(
                     • Most system commands require Shizuku
                     • Install Shizuku from Play Store for full power
                     
-                    Total: 75+ commands available!
+                    Total: 80+ commands available!
                     Type 'syshelp' for detailed system command guide.
                 """.trimIndent()
 
@@ -525,5 +678,274 @@ class CommandExecutor @Inject constructor(
             else -> false
         }
     }
-}
 
+    /**
+     * Handle opening an app by name
+     */
+    private fun handleOpenApp(appName: String): ShellResult {
+        // Use cache service to launch app
+        return when (val result = appCacheService.launchApp(appName)) {
+            is LaunchResult.Success -> {
+                ShellResult(
+                    status = ResultStatus.SUCCESS,
+                    message = "✅ Launched ${result.app.name}"
+                )
+            }
+            is LaunchResult.NotFound -> {
+                // Try to find similar apps
+                val suggestions = appCacheService.searchApps(appName).take(5)
+                val suggestionText = if (suggestions.isNotEmpty()) {
+                    "\n\n💡 Did you mean:\n" + suggestions.joinToString("\n") { "   • ${it.name}" }
+                } else {
+                    "\n\n💡 Tip: Type 'apps' to see all installed apps"
+                }
+
+                ShellResult(
+                    status = ResultStatus.FAILURE,
+                    message = "❌ App not found: $appName$suggestionText"
+                )
+            }
+            is LaunchResult.NotLaunchable -> {
+                ShellResult(
+                    status = ResultStatus.FAILURE,
+                    message = "❌ ${result.appName} cannot be launched (no launcher activity)"
+                )
+            }
+            is LaunchResult.NoLaunchIntent -> {
+                ShellResult(
+                    status = ResultStatus.FAILURE,
+                    message = "❌ Cannot launch ${result.appName}: No launch intent available"
+                )
+            }
+            is LaunchResult.Error -> {
+                ShellResult(
+                    status = ResultStatus.FAILURE,
+                    message = "❌ Failed to launch ${result.appName}: ${result.message}"
+                )
+            }
+        }
+    }
+
+    /**
+     * Handle listing installed apps
+     * Supports: apps, apps --system, apps --user, apps --all, apps [search]
+     */
+    private fun handleListApps(filter: String?): ShellResult {
+        try {
+            // Check cache state
+            val cacheState = appCacheService.cacheState.value
+            if (cacheState is CacheState.NotInitialized || cacheState is CacheState.Loading) {
+                // Fall back to direct query if cache not ready
+                return handleListAppsDirect(filter)
+            }
+
+            // Determine which apps to show
+            val showSystem = filter?.contains("--system") == true || filter?.contains("-s") == true
+            val showUser = filter?.contains("--user") == true || filter?.contains("-u") == true
+            val showAll = filter?.contains("--all") == true || filter?.contains("-a") == true
+
+            // Get search term if provided (not a flag)
+            val searchTerm = filter?.split(" ")
+                ?.filterNot { it.startsWith("-") }
+                ?.joinToString(" ")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+
+            // Get apps from cache
+            val appsList = when {
+                showAll -> appCacheService.getAllApps()
+                showSystem -> appCacheService.getSystemApps()
+                else -> appCacheService.getUserApps()
+            }.let { apps ->
+                if (searchTerm != null) {
+                    apps.filter { app ->
+                        app.name.contains(searchTerm, ignoreCase = true) ||
+                        app.packageName.contains(searchTerm, ignoreCase = true)
+                    }
+                } else {
+                    apps
+                }
+            }.sortedBy { it.name.lowercase() }
+
+            if (appsList.isEmpty()) {
+                return ShellResult(
+                    status = ResultStatus.SUCCESS,
+                    message = "📦 No apps found${if (searchTerm != null) " matching '$searchTerm'" else ""}"
+                )
+            }
+
+            // Build output
+            val header = buildString {
+                appendLine("╔══════════════════════════════════════════════════════════════╗")
+                appendLine("║              📱 INSTALLED APPLICATIONS                        ║")
+                appendLine("╠══════════════════════════════════════════════════════════════╣")
+                val type = when {
+                    showAll -> "All"
+                    showSystem -> "System"
+                    else -> "User"
+                }
+                appendLine("║  Type: $type Apps | Total: ${appsList.size} apps")
+                if (searchTerm != null) {
+                    appendLine("║  Filter: '$searchTerm'")
+                }
+                appendLine("╚══════════════════════════════════════════════════════════════╝")
+                appendLine()
+            }
+
+            val appsOutput = appsList.mapIndexed { index, app ->
+                val icon = if (app.isSystemApp) "⚙️" else "📱"
+                val launchable = if (app.isLaunchable) "" else " [not launchable]"
+                val num = String.format("%3d", index + 1)
+                "$icon $num. ${app.name}$launchable\n      └─ ${app.packageName} (v${app.version})"
+            }.joinToString("\n\n")
+
+            val footer = buildString {
+                appendLine()
+                appendLine("─".repeat(60))
+                appendLine("💡 Usage:")
+                appendLine("   apps              - List user apps")
+                appendLine("   apps --ui         - Show app picker")
+                appendLine("   apps --all        - List all apps")
+                appendLine("   apps --system     - List system apps")
+                appendLine("   apps [name]       - Search apps by name")
+                appendLine("   open <app>        - Open an app by name")
+            }
+
+            return ShellResult(
+                status = ResultStatus.SUCCESS,
+                message = header + appsOutput + footer,
+                data = appsList
+            )
+
+        } catch (e: Exception) {
+            return ShellResult(
+                status = ResultStatus.FAILURE,
+                message = "❌ Failed to list apps: ${e.message}",
+                error = e
+            )
+        }
+    }
+
+    /**
+     * Direct app listing (fallback when cache not ready)
+     */
+    private fun handleListAppsDirect(filter: String?): ShellResult {
+        try {
+            val pm = context.packageManager
+
+            // Determine which apps to show
+            val showSystem = filter?.contains("--system") == true || filter?.contains("-s") == true
+            val showUser = filter?.contains("--user") == true || filter?.contains("-u") == true
+            val showAll = filter?.contains("--all") == true || filter?.contains("-a") == true
+
+            // Get search term if provided (not a flag)
+            val searchTerm = filter?.split(" ")
+                ?.filterNot { it.startsWith("-") }
+                ?.joinToString(" ")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+
+            // Get installed apps
+            val installedApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+
+            val appsList = installedApps
+                .asSequence()
+                .map { appInfo ->
+                    val appName = pm.getApplicationLabel(appInfo).toString()
+                    val packageName = appInfo.packageName
+                    val isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                    val version = try {
+                        pm.getPackageInfo(packageName, 0).versionName ?: "?"
+                    } catch (e: Exception) {
+                        "?"
+                    }
+
+                    AppInfo(appName, packageName, version, isSystemApp)
+                }
+                .filter { app ->
+                    when {
+                        showAll -> true
+                        showSystem -> app.isSystemApp
+                        showUser -> !app.isSystemApp
+                        else -> !app.isSystemApp // Default: show user apps
+                    }
+                }
+                .filter { app ->
+                    if (searchTerm != null) {
+                        app.name.contains(searchTerm, ignoreCase = true) ||
+                        app.packageName.contains(searchTerm, ignoreCase = true)
+                    } else {
+                        true
+                    }
+                }
+                .sortedBy { it.name.lowercase() }
+                .toList()
+
+            if (appsList.isEmpty()) {
+                return ShellResult(
+                    status = ResultStatus.SUCCESS,
+                    message = "📦 No apps found${if (searchTerm != null) " matching '$searchTerm'" else ""}"
+                )
+            }
+
+            // Build output
+            val header = buildString {
+                appendLine("╔══════════════════════════════════════════════════════════════╗")
+                appendLine("║              📱 INSTALLED APPLICATIONS                        ║")
+                appendLine("╠══════════════════════════════════════════════════════════════╣")
+                val type = when {
+                    showAll -> "All"
+                    showSystem -> "System"
+                    else -> "User"
+                }
+                appendLine("║  Type: $type Apps | Total: ${appsList.size} apps (loading cache...)")
+                if (searchTerm != null) {
+                    appendLine("║  Filter: '$searchTerm'")
+                }
+                appendLine("╚══════════════════════════════════════════════════════════════╝")
+                appendLine()
+            }
+
+            val appsOutput = appsList.mapIndexed { index, app ->
+                val icon = if (app.isSystemApp) "⚙️" else "📱"
+                val num = String.format("%3d", index + 1)
+                "$icon $num. ${app.name}\n      └─ ${app.packageName} (v${app.version})"
+            }.joinToString("\n\n")
+
+            val footer = buildString {
+                appendLine()
+                appendLine("─".repeat(60))
+                appendLine("💡 Usage:")
+                appendLine("   apps              - List user apps")
+                appendLine("   apps --ui         - Show app picker")
+                appendLine("   apps --all        - List all apps")
+                appendLine("   apps --system     - List system apps")
+                appendLine("   apps [name]       - Search apps by name")
+                appendLine("   open <app>        - Open an app")
+            }
+
+            return ShellResult(
+                status = ResultStatus.SUCCESS,
+                message = header + appsOutput + footer,
+                data = appsList
+            )
+
+        } catch (e: Exception) {
+            return ShellResult(
+                status = ResultStatus.FAILURE,
+                message = "❌ Failed to list apps: ${e.message}",
+                error = e
+            )
+        }
+    }
+
+    /**
+     * Data class for app info
+     */
+    private data class AppInfo(
+        val name: String,
+        val packageName: String,
+        val version: String,
+        val isSystemApp: Boolean
+    )
+}

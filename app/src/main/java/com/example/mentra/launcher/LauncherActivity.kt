@@ -10,25 +10,41 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.navigation.NavHostController
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
 import com.example.mentra.shell.ui.ShellScreen
+import com.example.mentra.shell.apps.AppCacheService
 import com.example.mentra.ui.theme.MentraTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 /**
- * Launcher Activity
- * Main entry point when Mentra is set as the default launcher
- * Handles system navigation: Home, Back, Recents buttons
+ * Launcher Activity - SHELL AS HOME
+ * The Shell Terminal IS the home screen - command center for everything
+ * No-UI control philosophy: Control everything via shell commands
+ *
+ * When Mentra is set as default launcher:
+ * - Home button brings you to Shell
+ * - Back button does nothing (you're home)
+ * - All control is via terminal commands
  */
 @AndroidEntryPoint
 class LauncherActivity : ComponentActivity() {
 
+    @Inject
+    lateinit var appCacheService: AppCacheService
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Initialize app cache
+        appCacheService.initialize()
+
+        // Disable back press - Shell IS home, nowhere to go back
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                // Shell is home - back press does nothing
+                // This prevents accidentally closing the launcher
+            }
+        })
 
         setContent {
             MentraTheme {
@@ -36,51 +52,22 @@ class LauncherActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val navController = rememberNavController()
-                    val currentBackStackEntry by navController.currentBackStackEntryAsState()
-                    val currentRoute = currentBackStackEntry?.destination?.route
-
-                    // Handle back press based on current route
-                    LaunchedEffect(currentRoute) {
-                        val callback = object : OnBackPressedCallback(true) {
-                            override fun handleOnBackPressed() {
-                                when (currentRoute) {
-                                    "launcher" -> {
-                                        // On launcher home screen - do nothing
-                                        // Launcher should NOT close on back press
-                                    }
-                                    "shell" -> {
-                                        // In shell - go back to launcher
-                                        navController.popBackStack()
-                                    }
-                                    else -> {
-                                        // Any other screen - navigate back
-                                        if (!navController.popBackStack()) {
-                                            // Nothing to pop - stay on launcher
-                                        }
-                                    }
-                                }
-                            }
+                    // Shell IS the home screen - direct access to command center
+                    ShellScreen(
+                        appCacheService = appCacheService,
+                        onNavigateToMessages = {
+                            // Launch messaging activity
+                            startActivity(Intent(this@LauncherActivity, com.example.mentra.MainActivity::class.java).apply {
+                                putExtra("navigate_to", "messaging")
+                            })
+                        },
+                        onNavigateToDialer = {
+                            // Launch dialer activity
+                            startActivity(Intent(this@LauncherActivity, com.example.mentra.MainActivity::class.java).apply {
+                                putExtra("navigate_to", "dialer")
+                            })
                         }
-                        onBackPressedDispatcher.addCallback(callback)
-                    }
-
-                    NavHost(
-                        navController = navController,
-                        startDestination = "launcher"
-                    ) {
-                        composable("launcher") {
-                            LauncherScreen(
-                                onNavigateToShell = {
-                                    navController.navigate("shell")
-                                }
-                            )
-                        }
-
-                        composable("shell") {
-                            ShellScreen()
-                        }
-                    }
+                    )
                 }
             }
         }
@@ -88,18 +75,17 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Handle HOME button press (when launcher is already running)
-        // This brings the launcher to foreground
+        // Handle HOME button press (when already running)
+        // Just brings shell to foreground - already at home
         if (intent.action == Intent.ACTION_MAIN) {
-            // Already on launcher - do nothing or reset to home screen
+            // Already on shell/home - stays as is
         }
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // Called when user presses HOME to leave the launcher
-        // Or opens another app
-        // Save state if needed
+        // Called when user leaves via HOME or opens another app
+        // Shell stays ready in background
     }
 }
 

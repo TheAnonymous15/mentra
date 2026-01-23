@@ -17,6 +17,10 @@ import kotlinx.coroutines.delay
  * Futuristic Glassmorphic Modal with slide-to-answer/reject gesture control
  *
  * Handles both RINGING and ACTIVE call states in one modal
+ *
+ * NOTE: This is for INCOMING calls only. Cost tracking is NOT displayed
+ * because incoming calls don't incur costs for the receiver.
+ * For outgoing calls, use NexusCallModal which includes cost tracking.
  */
 @Composable
 fun IncomingCallPopup(
@@ -133,6 +137,8 @@ fun IncomingCallPopup(
                             phoneNumber = incomingCallState.phoneNumber,
                             contactName = incomingCallState.contactName,
                             callDuration = callDuration,
+                            // callCost is null for incoming calls - receiver doesn't pay
+                            callCost = null,
                             isMuted = isMuted,
                             isSpeaker = isSpeaker,
                             isOnHold = isOnHold,

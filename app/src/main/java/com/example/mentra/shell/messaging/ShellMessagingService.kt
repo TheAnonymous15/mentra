@@ -3,7 +3,9 @@ package com.example.mentra.shell.messaging
 import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
+import android.net.Uri
 import android.provider.ContactsContract
+import android.provider.Telephony
 import android.telephony.SmsManager
 import androidx.core.database.getStringOrNull
 import com.example.mentra.messaging.Contact
@@ -14,6 +16,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.*
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -79,11 +83,30 @@ class ShellMessagingService @Inject constructor(
         // "text my wife hello"
         // "sms +254712123123 meeting at 5"
         // "message mom I'll be late"
-        // "send a message to wife saying hello"
+        // "send a message to wife saying hello" // "message x hello" (where x is a custom alias)
 
         var recipient: String? = null
         var messageContent: String? = null
         var isAlias = false
+
+        // First, check if any word in the input is a registered alias
+        // This allows custom aliases like "x", "dk", etc.
+        for (word in words) {
+            val cleanWord = word.lowercase().replace(Regex("[^a-z0-9]"), "")
+            if (cleanWord.isNotEmpty() && cleanWord !in sendKeywords && cleanWord != "a" && cleanWord != "my" && cleanWord != "to") {
+                val resolvedContact = aliasManager.getContactByAlias(cleanWord)
+                if (resolvedContact != null) {
+                    recipient = cleanWord
+                    isAlias = true
+                    messageContent = extractMessageContent(input, recipient)
+                    return MessagingIntent.SendToAlias(
+                        alias = recipient,
+                        contact = resolvedContact,
+                        message = messageContent
+                    )
+                }
+            }
+        }
 
         // Pattern: "to [number/alias]" - handles "send message to 0712123123"
         val toPattern = Regex("\\bto\\s+([+]?[0-9]{7,15}|\\w+)", RegexOption.IGNORE_CASE)
@@ -93,13 +116,24 @@ class ShellMessagingService @Inject constructor(
             if (isValidPhoneNumber(potentialRecipient)) {
                 recipient = potentialRecipient
                 isAlias = false
-            } else if (potentialRecipient.lowercase() in relationshipKeywords) {
-                recipient = potentialRecipient.lowercase()
-                isAlias = true
             } else {
-                // Could be a contact name
-                recipient = potentialRecipient
-                isAlias = true
+                // Check alias database first, then relationship keywords
+                val resolvedContact = aliasManager.getContactByAlias(potentialRecipient.lowercase())
+                if (resolvedContact != null) {
+                    messageContent = extractMessageContent(input, potentialRecipient)
+                    return MessagingIntent.SendToAlias(
+                        alias = potentialRecipient.lowercase(),
+                        contact = resolvedContact,
+                        message = messageContent
+                    )
+                } else if (potentialRecipient.lowercase() in relationshipKeywords) {
+                    recipient = potentialRecipient.lowercase()
+                    isAlias = true
+                } else {
+                    // Treat as potential alias to set up
+                    recipient = potentialRecipient.lowercase()
+                    isAlias = true
+                }
             }
         }
 
@@ -109,7 +143,16 @@ class ShellMessagingService @Inject constructor(
             val myMatch = myPattern.find(input)
             if (myMatch != null) {
                 val potentialAlias = myMatch.groupValues[1].lowercase()
-                if (potentialAlias in relationshipKeywords) {
+                // Check alias database first
+                val resolvedContact = aliasManager.getContactByAlias(potentialAlias)
+                if (resolvedContact != null) {
+                    messageContent = extractMessageContent(input, potentialAlias)
+                    return MessagingIntent.SendToAlias(
+                        alias = potentialAlias,
+                        contact = resolvedContact,
+                        message = messageContent
+                    )
+                } else if (potentialAlias in relationshipKeywords) {
                     recipient = potentialAlias
                     isAlias = true
                 }
@@ -352,6 +395,245 @@ class ShellMessagingService @Inject constructor(
         _currentState.value = MessagingState.Idle
         _pendingMessage.value = null
     }
+
+    /**
+     * Get recent conversations (inbox summary)
+     */
+    suspend fun getInbox(limit: Int = 10): List<InboxConversation> = withContext(Dispatchers.IO) {
+        val conversations = mutableListOf<InboxConversation>()
+
+        try {
+            val uri = Telephony.Sms.CONTENT_URI
+            val projection = arrayOf(
+                Telephony.Sms._ID,
+                Telephony.Sms.ADDRESS,
+                Telephony.Sms.BODY,
+                Telephony.Sms.DATE,
+                Telephony.Sms.READ,
+                Telephony.Sms.TYPE
+            )
+
+            // Get latest message per conversation
+            val cursor = context.contentResolver.query(
+                uri,
+                projection,
+                null,
+                null,
+                "${Telephony.Sms.DATE} DESC"
+            )
+
+            val seenAddresses = mutableSetOf<String>()
+
+            cursor?.use {
+                while (it.moveToNext() && conversations.size < limit) {
+                    val address = it.getString(it.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)) ?: continue
+                    val normalizedAddress = normalizeNumber(address)
+
+                    if (normalizedAddress in seenAddresses) continue
+                    seenAddresses.add(normalizedAddress)
+
+                    val body = it.getString(it.getColumnIndexOrThrow(Telephony.Sms.BODY)) ?: ""
+                    val date = it.getLong(it.getColumnIndexOrThrow(Telephony.Sms.DATE))
+                    val isRead = it.getInt(it.getColumnIndexOrThrow(Telephony.Sms.READ)) == 1
+                    val type = it.getInt(it.getColumnIndexOrThrow(Telephony.Sms.TYPE))
+
+                    // Lookup contact name
+                    val contactName = getContactName(normalizedAddress)
+
+                    // Count unread messages from this address
+                    val unreadCount = countUnreadFrom(normalizedAddress)
+
+                    conversations.add(InboxConversation(
+                        address = normalizedAddress,
+                        contactName = contactName,
+                        lastMessage = body,
+                        lastMessageTime = date,
+                        unreadCount = unreadCount,
+                        isOutgoing = type == Telephony.Sms.MESSAGE_TYPE_SENT
+                    ))
+                }
+            }
+        } catch (e: Exception) {
+            // Handle permission or other errors
+        }
+
+        conversations
+    }
+
+    /**
+     * Get unread message count
+     */
+    suspend fun getUnreadCount(): Int = withContext(Dispatchers.IO) {
+        try {
+            val cursor = context.contentResolver.query(
+                Telephony.Sms.Inbox.CONTENT_URI,
+                arrayOf("COUNT(*)"),
+                "${Telephony.Sms.READ} = 0",
+                null,
+                null
+            )
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    return@withContext it.getInt(0)
+                }
+            }
+        } catch (e: Exception) {
+            // Handle errors
+        }
+        0
+    }
+
+    /**
+     * Count unread messages from a specific address
+     */
+    private fun countUnreadFrom(address: String): Int {
+        try {
+            val cursor = context.contentResolver.query(
+                Telephony.Sms.Inbox.CONTENT_URI,
+                arrayOf("COUNT(*)"),
+                "${Telephony.Sms.READ} = 0 AND ${Telephony.Sms.ADDRESS} LIKE ?",
+                arrayOf("%${address.takeLast(10)}%"),
+                null
+            )
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    return it.getInt(0)
+                }
+            }
+        } catch (e: Exception) {
+            // Handle errors
+        }
+        return 0
+    }
+
+    /**
+     * Read messages from a specific contact/number
+     */
+    suspend fun readMessagesFrom(addressOrAlias: String, limit: Int = 20): List<ShellMessage> = withContext(Dispatchers.IO) {
+        val messages = mutableListOf<ShellMessage>()
+
+        // Resolve alias if needed
+        val resolvedAddress = aliasManager.getContactByAlias(addressOrAlias.lowercase())
+            ?.phoneNumbers?.firstOrNull() ?: addressOrAlias
+
+        try {
+            val uri = Telephony.Sms.CONTENT_URI
+            val projection = arrayOf(
+                Telephony.Sms._ID,
+                Telephony.Sms.ADDRESS,
+                Telephony.Sms.BODY,
+                Telephony.Sms.DATE,
+                Telephony.Sms.TYPE,
+                Telephony.Sms.READ
+            )
+
+            // Match by last digits of phone number
+            val selection = "${Telephony.Sms.ADDRESS} LIKE ?"
+            val selectionArgs = arrayOf("%${resolvedAddress.takeLast(10)}%")
+
+            val cursor = context.contentResolver.query(
+                uri,
+                projection,
+                selection,
+                selectionArgs,
+                "${Telephony.Sms.DATE} DESC LIMIT $limit"
+            )
+
+            cursor?.use {
+                while (it.moveToNext()) {
+                    val id = it.getLong(it.getColumnIndexOrThrow(Telephony.Sms._ID))
+                    val body = it.getString(it.getColumnIndexOrThrow(Telephony.Sms.BODY)) ?: ""
+                    val date = it.getLong(it.getColumnIndexOrThrow(Telephony.Sms.DATE))
+                    val type = it.getInt(it.getColumnIndexOrThrow(Telephony.Sms.TYPE))
+                    val isRead = it.getInt(it.getColumnIndexOrThrow(Telephony.Sms.READ)) == 1
+
+                    messages.add(ShellMessage(
+                        id = id,
+                        body = body,
+                        timestamp = date,
+                        isOutgoing = type == Telephony.Sms.MESSAGE_TYPE_SENT,
+                        isRead = isRead
+                    ))
+                }
+            }
+
+            // Mark as read after reading
+            markMessagesAsRead(resolvedAddress)
+        } catch (e: Exception) {
+            // Handle errors
+        }
+
+        // Return in chronological order (oldest first)
+        messages.reversed()
+    }
+
+    /**
+     * Mark messages from an address as read
+     */
+    private fun markMessagesAsRead(address: String) {
+        try {
+            val values = android.content.ContentValues().apply {
+                put(Telephony.Sms.READ, 1)
+            }
+            context.contentResolver.update(
+                Telephony.Sms.Inbox.CONTENT_URI,
+                values,
+                "${Telephony.Sms.ADDRESS} LIKE ? AND ${Telephony.Sms.READ} = 0",
+                arrayOf("%${address.takeLast(10)}%")
+            )
+        } catch (e: Exception) {
+            // Handle errors (might need default SMS app permission)
+        }
+    }
+
+    /**
+     * Get contact name from phone number
+     */
+    private fun getContactName(phoneNumber: String): String? {
+        try {
+            val uri = Uri.withAppendedPath(
+                ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                Uri.encode(phoneNumber)
+            )
+            val cursor = context.contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    return it.getString(0)
+                }
+            }
+        } catch (e: Exception) {
+            // Handle errors
+        }
+        return null
+    }
+
+    /**
+     * Normalize phone number for comparison
+     */
+    private fun normalizeNumber(number: String): String {
+        return number.replace(Regex("[^+0-9]"), "")
+    }
+
+    /**
+     * Search for threads matching a keyword (contact name or address)
+     * Returns list of matching conversations
+     */
+    suspend fun searchThreadsByKeyword(keyword: String, limit: Int = 10): List<InboxConversation> = withContext(Dispatchers.IO) {
+        val allConversations = getInbox(50) // Get more to search through
+        val lowerKeyword = keyword.lowercase()
+
+        allConversations.filter { conv ->
+            val nameMatch = conv.contactName?.lowercase()?.contains(lowerKeyword) == true
+            val addressMatch = conv.address.lowercase().contains(lowerKeyword)
+            nameMatch || addressMatch
+        }.take(limit)
+    }
 }
 
 /**
@@ -419,3 +701,25 @@ sealed class SendResult {
     data class Failed(val error: String) : SendResult()
 }
 
+/**
+ * Inbox conversation summary
+ */
+data class InboxConversation(
+    val address: String,
+    val contactName: String?,
+    val lastMessage: String,
+    val lastMessageTime: Long,
+    val unreadCount: Int,
+    val isOutgoing: Boolean
+)
+
+/**
+ * Message for shell display
+ */
+data class ShellMessage(
+    val id: Long,
+    val body: String,
+    val timestamp: Long,
+    val isOutgoing: Boolean,
+    val isRead: Boolean
+)

@@ -55,6 +55,10 @@ class DialerViewModel @Inject constructor(
     // Incoming call state
     val incomingCallState: StateFlow<IncomingCallState> = incomingCallHandler.incomingCallState
 
+    // Billing info for call cost display
+    val totalCallCost: StateFlow<Double> = dialerManager.totalCallCost
+    val isBillingTracking: StateFlow<Boolean> = dialerManager.isBillingTracking
+
     // UI state
     private val _selectedTab = MutableStateFlow(DialerTab.KEYPAD)
     val selectedTab: StateFlow<DialerTab> = _selectedTab.asStateFlow()

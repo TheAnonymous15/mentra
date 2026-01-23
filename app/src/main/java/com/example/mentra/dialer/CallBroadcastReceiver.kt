@@ -53,13 +53,12 @@ class CallBroadcastReceiver : BroadcastReceiver() {
 /**
  * Incoming Call Notification Manager
  *
- * Handles showing fullscreen incoming call notifications.
+ * Handles showing fullscreen incoming call UI directly (no notification).
  * Works when screen is off, on lock screen, and during Doze mode.
  * Plays ringtone and vibrates for incoming calls.
  */
 object IncomingCallNotificationManager {
-    private const val NOTIFICATION_CHANNEL_ID = "mentra_incoming_call"
-    private const val NOTIFICATION_ID = 9999
+    private const val TAG = "IncomingCallNotif"
 
     // Vibration pattern: wait, vibrate, pause, vibrate...
     private val VIBRATION_PATTERN = longArrayOf(0, 1000, 500, 1000, 500)
@@ -68,6 +67,9 @@ object IncomingCallNotificationManager {
     private var vibrator: android.os.Vibrator? = null
     private var wakeLock: android.os.PowerManager.WakeLock? = null
 
+    /**
+     * Show incoming call UI directly - no notification, just launch the activity
+     */
     fun showIncomingCallNotification(context: Context, phoneNumber: String) {
         // Acquire wake lock to turn on screen
         acquireWakeLock(context)
@@ -75,101 +77,20 @@ object IncomingCallNotificationManager {
         // Start ringtone and vibration
         startRingtoneAndVibration(context)
 
-        // Create notification channel
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            val ringtoneUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
-            val channel = android.app.NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "Incoming Calls",
-                android.app.NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Notifications for incoming calls"
-                setSound(
-                    ringtoneUri,
-                    android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                enableVibration(true)
-                vibrationPattern = VIBRATION_PATTERN
-                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
-                setBypassDnd(true)
+        // Launch IncomingCallActivity directly - bypasses notification completely
+        try {
+            val fullScreenIntent = Intent(context, IncomingCallActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_NO_USER_ACTION or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                putExtra(IncomingCallActivity.EXTRA_PHONE_NUMBER, phoneNumber)
             }
-
-            val notificationManager = context.getSystemService(android.app.NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
+            context.startActivity(fullScreenIntent)
+            Log.d(TAG, "Launched IncomingCallActivity for: $phoneNumber")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch IncomingCallActivity", e)
         }
-
-        // Create fullscreen intent for incoming call UI
-        val fullScreenIntent = Intent(context, IncomingCallActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_NO_USER_ACTION or
-                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-            putExtra("phone_number", phoneNumber)
-        }
-
-        val fullScreenPendingIntent = android.app.PendingIntent.getActivity(
-            context,
-            0,
-            fullScreenIntent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Answer action
-        val answerIntent = Intent(context, CallActionReceiver::class.java).apply {
-            action = CallActionReceiver.ACTION_ANSWER
-            putExtra("phone_number", phoneNumber)
-        }
-        val answerPendingIntent = android.app.PendingIntent.getBroadcast(
-            context, 1, answerIntent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Decline action
-        val declineIntent = Intent(context, CallActionReceiver::class.java).apply {
-            action = CallActionReceiver.ACTION_DECLINE
-        }
-        val declinePendingIntent = android.app.PendingIntent.getBroadcast(
-            context, 2, declineIntent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Build notification
-        val notification = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            android.app.Notification.Builder(context, NOTIFICATION_CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            android.app.Notification.Builder(context)
-        }.apply {
-            setSmallIcon(android.R.drawable.ic_menu_call)
-            setContentTitle("Incoming Call")
-            setContentText(phoneNumber)
-            setCategory(android.app.Notification.CATEGORY_CALL)
-            setFullScreenIntent(fullScreenPendingIntent, true)
-            setOngoing(true)
-            setAutoCancel(false)
-
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                addAction(
-                    android.app.Notification.Action.Builder(
-                        android.graphics.drawable.Icon.createWithResource(context, android.R.drawable.ic_menu_call),
-                        "Answer",
-                        answerPendingIntent
-                    ).build()
-                )
-                addAction(
-                    android.app.Notification.Action.Builder(
-                        android.graphics.drawable.Icon.createWithResource(context, android.R.drawable.ic_menu_close_clear_cancel),
-                        "Decline",
-                        declinePendingIntent
-                    ).build()
-                )
-            }
-        }.build()
-
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     fun cancelIncomingCallNotification(context: Context) {
@@ -179,9 +100,7 @@ object IncomingCallNotificationManager {
         // Release wake lock
         releaseWakeLock()
 
-        // Cancel notification
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        notificationManager.cancel(NOTIFICATION_ID)
+        Log.d(TAG, "Cancelled incoming call UI")
     }
 
     private fun acquireWakeLock(context: Context) {

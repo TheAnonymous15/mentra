@@ -20,6 +20,7 @@ import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.mentra.R
+import com.example.mentra.shell.settings.ShellSettingsManager
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -39,9 +40,9 @@ class CallForegroundService : Service() {
     companion object {
         private const val TAG = "CallForegroundService"
 
-        // Notification
-        const val CHANNEL_ID = "mentra_call_channel"
-        const val CHANNEL_NAME = "Active Calls"
+        // Notification - use unique channel ID to avoid cached settings
+        const val CHANNEL_ID = "mentra_call_service_v2"
+        const val CHANNEL_NAME = "Call Service"
         const val NOTIFICATION_ID = 2001
 
         // Actions
@@ -169,18 +170,19 @@ class CallForegroundService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_LOW // LOW = no heads-up popup, no sound
             ).apply {
-                description = "Active call notifications"
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                setBypassDnd(true)
+                description = "Call service notifications"
+                lockscreenVisibility = Notification.VISIBILITY_SECRET // Hidden on lock screen
+                setBypassDnd(false)
                 enableVibration(false) // We handle vibration manually
-                setSound(null, null) // We handle ringtone manually via audio focus
+                setSound(null, null) // We handle ringtone manually
+                setShowBadge(false) // No badge
             }
 
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
-            Log.d(TAG, "Notification channel created")
+            Log.d(TAG, "Notification channel created (low importance)")
         }
     }
 
@@ -192,26 +194,72 @@ class CallForegroundService : Service() {
         Log.d(TAG, "Handling incoming call from: $currentPhoneNumber")
         isRinging = true
 
-        // 1. FIRST - Launch the IncomingCallActivity to show our slide-to-answer modal
-        // This must happen before notification to ensure our UI shows on top
-        launchIncomingCallActivity()
+        // Check if in-shell incoming call is enabled
+        val prefs = getSharedPreferences("mentra_shell_settings", Context.MODE_PRIVATE)
+        val inShellIncomingCall = prefs.getBoolean(ShellSettingsManager.KEY_IN_SHELL_INCOMING_CALL, false)
 
-        // 2. Start foreground with CALL-CATEGORY notification (required for background survival)
-        val notification = buildIncomingCallNotification()
+        // 1. Start foreground service first (required for background survival)
+        val notification = if (inShellIncomingCall) {
+            // Build a silent notification without fullscreen intent
+            buildSilentIncomingCallNotification()
+        } else {
+            buildIncomingCallNotification()
+        }
         startForeground(NOTIFICATION_ID, notification)
 
-        // 3. Request audio focus
+        // 2. Request audio focus
         requestAudioFocus()
 
-        // 4. Start ringtone and vibration
+        // 3. Start ringtone and vibration (always - shell users still need to hear it)
         startRingtone()
         startVibration()
+
+        // 4. Launch the IncomingCallActivity after 0.9 seconds (only if not in-shell mode)
+        // Quick delay to ensure service is running, then modal auto-opens
+        if (!inShellIncomingCall) {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (isRinging) { // Only launch if still ringing (not answered/rejected)
+                    launchIncomingCallActivity()
+                }
+            }, 900) // 0.9 second delay
+        } else {
+            Log.d(TAG, "In-shell incoming call enabled - handling call in shell terminal")
+        }
+    }
+
+    /**
+     * Build a silent notification for in-shell incoming calls (no fullscreen intent)
+     */
+    private fun buildSilentIncomingCallNotification(): Notification {
+        val displayName = currentContactName ?: currentPhoneNumber ?: "Unknown"
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Incoming call")
+            .setContentText("From: $displayName (handling in shell)")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setShowWhen(false)
+            .setSilent(true)
+            .build()
     }
 
     /**
      * Launch the IncomingCallActivity to show our slide-to-answer modal
+     * Only launches if in-shell incoming call is disabled
      */
     private fun launchIncomingCallActivity() {
+        // Check if in-shell incoming call is enabled - if so, skip UI launch
+        val prefs = getSharedPreferences("mentra_shell_settings", Context.MODE_PRIVATE)
+        val inShellIncomingCall = prefs.getBoolean(ShellSettingsManager.KEY_IN_SHELL_INCOMING_CALL, false)
+
+        if (inShellIncomingCall) {
+            Log.d(TAG, "In-shell incoming call enabled - skipping IncomingCallActivity launch")
+            return
+        }
+
         try {
             val intent = Intent(this, IncomingCallActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -238,6 +286,45 @@ class CallForegroundService : Service() {
 
         // Request audio focus for call audio
         requestAudioFocus()
+
+        // Check if we should show UI - don't launch if it's a shell call or UI is already showing
+        val dialerManager = DialerManagerProvider.getDialerManager()
+        val shouldShowUi = dialerManager?.shouldShowCallUi() ?: true
+
+        if (!shouldShowUi) {
+            Log.d(TAG, "Skipping UI launch - shell call or UI already showing")
+            return
+        }
+
+        // Automatically launch our in-call UI modal after 0.9 seconds
+        // This handles calls made by other dialers (like Truecaller)
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            // Double-check before launching (in case UI was shown in the meantime)
+            val stillShouldShow = DialerManagerProvider.getDialerManager()?.shouldShowCallUi() ?: true
+            if (stillShouldShow) {
+                launchInCallActivity()
+            }
+        }, 900) // 0.9 second delay
+    }
+
+    /**
+     * Launch the InCallActivity to show our in-call UI modal
+     * Used for outgoing calls and calls made by other apps
+     */
+    private fun launchInCallActivity() {
+        try {
+            val intent = Intent(this, InCallActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("phone_number", currentPhoneNumber)
+                putExtra("contact_name", currentContactName)
+            }
+            startActivity(intent)
+            Log.d(TAG, "Launched InCallActivity for: $currentPhoneNumber")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch InCallActivity", e)
+        }
     }
 
     private fun handleAnswerCall() {
@@ -294,12 +381,11 @@ class CallForegroundService : Service() {
     // ═══════════════════════════════════════════════════════════════════
 
     private fun buildIncomingCallNotification(): Notification {
-        val displayName = currentContactName ?: currentPhoneNumber ?: "Unknown"
-
-        // Full-screen intent for lock screen
+        // Full-screen intent - this is what launches our modal directly
         val fullScreenIntent = Intent(this, IncomingCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_NO_USER_ACTION
+                    Intent.FLAG_ACTIVITY_NO_USER_ACTION or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             putExtra(IncomingCallActivity.EXTRA_PHONE_NUMBER, currentPhoneNumber)
             putExtra(IncomingCallActivity.EXTRA_CONTACT_NAME, currentContactName)
         }
@@ -308,45 +394,18 @@ class CallForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Answer action
-        val answerIntent = Intent(this, CallForegroundService::class.java).apply {
-            action = ACTION_ANSWER
-        }
-        val answerPendingIntent = PendingIntent.getService(
-            this, 1, answerIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Reject action
-        val rejectIntent = Intent(this, CallForegroundService::class.java).apply {
-            action = ACTION_REJECT
-        }
-        val rejectPendingIntent = PendingIntent.getService(
-            this, 2, rejectIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
+        // Create an INVISIBLE notification - required for foreground service but hidden from user
+        // The IncomingCallActivity modal handles all user interaction
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("Incoming Call")
-            .setContentText(displayName)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_CALL) // IMPORTANT: CATEGORY_CALL
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentTitle("") // Empty title
+            .setContentText("") // Empty text
+            .setPriority(NotificationCompat.PRIORITY_MIN) // Lowest priority - no popup
+            .setCategory(NotificationCompat.CATEGORY_SERVICE) // Not CATEGORY_CALL to avoid call UI
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET) // Hidden everywhere
             .setOngoing(true)
-            .setAutoCancel(false)
-            .setFullScreenIntent(fullScreenPendingIntent, true) // IMPORTANT: fullScreenIntent
-            .setContentIntent(fullScreenPendingIntent)
-            .addAction(
-                android.R.drawable.ic_menu_call,
-                "Answer",
-                answerPendingIntent
-            )
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Decline",
-                rejectPendingIntent
-            )
+            .setSilent(true) // No sound
+            .setFullScreenIntent(fullScreenPendingIntent, true) // This launches our modal
             .build()
     }
 

@@ -66,7 +66,8 @@ fun DialerKeypadContent(
     onCallLogEditBeforeCall: (CallLogEntry) -> Unit = {},
     onCallLogDelete: (CallLogEntry) -> Unit = {},
     onCallLogBlock: (CallLogEntry) -> Unit = {},
-    onCallLogAddToContacts: (CallLogEntry) -> Unit = {}
+    onCallLogAddToContacts: (CallLogEntry) -> Unit = {},
+    onSetDefaultDialerClick: () -> Unit = {}
 ) {
     val showFiltered = input.length >= 2 && (filteredContacts.isNotEmpty() || filteredCalls.isNotEmpty())
     val showAllLogs = !isKeypadVisible && allCallLogs.isNotEmpty()
@@ -103,7 +104,8 @@ fun DialerKeypadContent(
                     onCallLogEditBeforeCall = onCallLogEditBeforeCall,
                     onCallLogDelete = onCallLogDelete,
                     onCallLogBlock = onCallLogBlock,
-                    onCallLogAddToContacts = onCallLogAddToContacts
+                    onCallLogAddToContacts = onCallLogAddToContacts,
+                    onSetDefaultDialerClick = onSetDefaultDialerClick
                 )
             }
         }
@@ -325,7 +327,8 @@ fun KeypadSuggestionsPanel(
     onCallLogEditBeforeCall: (CallLogEntry) -> Unit = {},
     onCallLogDelete: (CallLogEntry) -> Unit = {},
     onCallLogBlock: (CallLogEntry) -> Unit = {},
-    onCallLogAddToContacts: (CallLogEntry) -> Unit = {}
+    onCallLogAddToContacts: (CallLogEntry) -> Unit = {},
+    onSetDefaultDialerClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var showSearchModal by remember { mutableStateOf(false) }
@@ -394,7 +397,8 @@ fun KeypadSuggestionsPanel(
                     showRecentCalls = showRecentCalls,
                     isDefaultDialer = isDefaultDialer,
                     displayCount = displayCalls.size,
-                    onSearchClick = { showSearchModal = true }
+                    onSearchClick = { showSearchModal = true },
+                    onSetDefaultDialerClick = onSetDefaultDialerClick
                 )
 
                 // Items
@@ -425,7 +429,8 @@ private fun SuggestionsPanelHeader(
     showRecentCalls: Boolean,
     isDefaultDialer: Boolean,
     displayCount: Int,
-    onSearchClick: () -> Unit
+    onSearchClick: () -> Unit,
+    onSetDefaultDialerClick: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
@@ -464,14 +469,16 @@ private fun SuggestionsPanelHeader(
                 }
             }
 
-            // Default dialer badge
+            // Default dialer badge - clickable to set as default
             Surface(
+                onClick = onSetDefaultDialerClick,
                 shape = RoundedCornerShape(10.dp),
-                color = if (isDefaultDialer) NexusDialerColors.success.copy(alpha = 0.15f) else NexusDialerColors.callRed.copy(alpha = 0.15f)
+                color = if (isDefaultDialer) NexusDialerColors.success.copy(alpha = 0.15f) else NexusDialerColors.callRed.copy(alpha = 0.15f),
+                border = BorderStroke(1.dp, if (isDefaultDialer) NexusDialerColors.success.copy(alpha = 0.3f) else NexusDialerColors.callRed.copy(alpha = 0.3f))
             ) {
                 Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Box(modifier = Modifier.size(5.dp).background(if (isDefaultDialer) NexusDialerColors.success else NexusDialerColors.callRed, CircleShape))
-                    Text(if (isDefaultDialer) "DEFAULT" else "NOT DEFAULT", fontSize = 8.sp, color = if (isDefaultDialer) NexusDialerColors.success else NexusDialerColors.callRed, fontWeight = FontWeight.Bold)
+                    Text(if (isDefaultDialer) "DEFAULT" else "SET DEFAULT", fontSize = 8.sp, color = if (isDefaultDialer) NexusDialerColors.success else NexusDialerColors.callRed, fontWeight = FontWeight.Bold)
                 }
             }
 

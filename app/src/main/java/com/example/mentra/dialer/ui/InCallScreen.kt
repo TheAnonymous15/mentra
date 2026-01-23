@@ -9,11 +9,10 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,6 +30,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -43,34 +43,27 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.mentra.dialer.*
 import kotlinx.coroutines.delay
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
- * NEXUS IN-CALL MODAL - Alien Glassmorphic Calling Interface
- * Works even when not the default dialer - listens to call state
+ * NEXUS IN-CALL MODAL - Compact Alien Glassmorphic Interface
+ * Ultra-modern floating call control
  */
 
-private object NexusInCallColors {
-    val background = Color(0xFF030810)
-    val backgroundSecondary = Color(0xFF0A1628)
-    val surface = Color(0xFF0F1A2E)
-    val glass = Color(0xFF0A1628).copy(alpha = 0.95f)
+private object NexusCallTheme {
+    val voidBlack = Color(0xFF000000)
+    val deepSpace = Color(0xFF050A15)
+    val nebula = Color(0xFF0A1628)
+    val glass = Color(0xFF0D1B2A).copy(alpha = 0.95f)
 
-    val primary = Color(0xFF00E5FF)
-    val secondary = Color(0xFF7C4DFF)
-    val accent = Color(0xFFFF4081)
+    val neonCyan = Color(0xFF00F5FF)
+    val electricPurple = Color(0xFFBF40FF)
+    val plasmaGreen = Color(0xFF00FF87)
+    val solarOrange = Color(0xFFFF6B35)
+    val cosmicPink = Color(0xFFFF2E63)
 
-    val success = Color(0xFF00E676)
-    val warning = Color(0xFFFFAB00)
-    val error = Color(0xFFFF5252)
-
-    val textPrimary = Color(0xFFFFFFFF)
-    val textSecondary = Color(0xFFB0BEC5)
-    val textMuted = Color(0xFF607D8B)
-
-    val glassBorder = Color(0xFF00E5FF).copy(alpha = 0.4f)
-    val glassBackground = Color(0xFF0A1628).copy(alpha = 0.92f)
+    val textWhite = Color(0xFFFFFFFF)
+    val textSilver = Color(0xFFB8C5D6)
+    val textDim = Color(0xFF5C7A99)
 }
 
 @Composable
@@ -82,61 +75,44 @@ fun InCallScreen(
     val currentCall by viewModel.currentCall.collectAsState()
     val callState by viewModel.callState.collectAsState()
     val audioState by viewModel.audioState.collectAsState()
-    val isDefaultDialer by viewModel.isDefaultDialer.collectAsState()
+    val totalCallCost by viewModel.totalCallCost.collectAsState()
+    val isBillingTracking by viewModel.isBillingTracking.collectAsState()
 
     var showDtmfKeypad by remember { mutableStateOf(false) }
     var dtmfInput by remember { mutableStateOf("") }
-    var isCallActive by remember { mutableStateOf(false) } // Start as false, set true when OFFHOOK
+    var isCallActive by remember { mutableStateOf(false) }
     var callDuration by remember { mutableLongStateOf(0L) }
     var callConnectedTime by remember { mutableLongStateOf(0L) }
 
-    // Phone state listener for tracking call state (works when not default dialer)
+    // Phone state listener
     DisposableEffect(Unit) {
         val callStateReceiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
                 if (intent?.action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
                     val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
-                    android.util.Log.d("InCallScreen", "Phone state changed: $state")
                     when (state) {
-                        TelephonyManager.EXTRA_STATE_IDLE -> {
-                            isCallActive = false
-                        }
+                        TelephonyManager.EXTRA_STATE_IDLE -> isCallActive = false
                         TelephonyManager.EXTRA_STATE_OFFHOOK -> {
-                            // Call just connected
                             if (!isCallActive) {
                                 isCallActive = true
-                                // Set the connected time NOW when the call actually connects
-                                if (callConnectedTime == 0L) {
-                                    callConnectedTime = System.currentTimeMillis()
-                                    android.util.Log.d("InCallScreen", "Call connected, start time: $callConnectedTime")
-                                }
+                                if (callConnectedTime == 0L) callConnectedTime = System.currentTimeMillis()
                             }
-                        }
-                        TelephonyManager.EXTRA_STATE_RINGING -> {
-                            // Incoming call ringing - don't set isCallActive yet
                         }
                     }
                 }
             }
         }
-
-        val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
-        context.registerReceiver(callStateReceiver, filter)
-
-        onDispose {
-            try { context.unregisterReceiver(callStateReceiver) } catch (_: Exception) {}
-        }
+        context.registerReceiver(callStateReceiver, IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED))
+        onDispose { try { context.unregisterReceiver(callStateReceiver) } catch (_: Exception) {} }
     }
 
-    // Duration timer - only starts when we have a valid connected time
+    // Duration timer
     LaunchedEffect(isCallActive, callConnectedTime) {
         if (isCallActive && callConnectedTime > 0) {
             while (isCallActive) {
-                val now = System.currentTimeMillis()
-                callDuration = (now - callConnectedTime) / 1000
-                // Safety check - if duration is negative or unreasonably large, reset
-                if (callDuration < 0 || callDuration > 86400) { // More than 24 hours is suspicious
-                    callConnectedTime = now
+                callDuration = (System.currentTimeMillis() - callConnectedTime) / 1000
+                if (callDuration < 0 || callDuration > 86400) {
+                    callConnectedTime = System.currentTimeMillis()
                     callDuration = 0
                 }
                 delay(1000)
@@ -144,53 +120,40 @@ fun InCallScreen(
         }
     }
 
-    // Auto-close when call ends
+    // Auto-close
     LaunchedEffect(callState, isCallActive) {
         if ((callState == CallState.DISCONNECTED || callState == CallState.IDLE) && !isCallActive) {
-            delay(2000)
+            delay(1500)
             onCallEnded()
         }
     }
 
     Dialog(
         onDismissRequest = { },
-        properties = DialogProperties(
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false,
-            usePlatformDefaultWidth = false
-        )
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false, usePlatformDefaultWidth = false)
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.9f)),
+            modifier = Modifier.fillMaxSize().background(NexusCallTheme.voidBlack.copy(alpha = 0.92f)),
             contentAlignment = Alignment.Center
         ) {
-            // Animated background
-            CallBackgroundEffect(callState, isCallActive)
+            // Ambient particles
+            AlienAmbientEffect(callState, isCallActive)
 
-            // Main modal
-            CallModalContent(
-                modifier = Modifier
-                    .fillMaxWidth(0.95f)
-                    .fillMaxHeight(0.85f),
+            // Compact floating modal
+            NexusCallModal(
                 currentCall = currentCall,
                 callState = callState,
                 audioState = audioState,
                 callDuration = callDuration,
+                callCost = if (isBillingTracking) totalCallCost else null,
                 isCallActive = isCallActive,
                 showDtmfKeypad = showDtmfKeypad,
                 dtmfInput = dtmfInput,
-                onDtmfDigit = { digit ->
-                    dtmfInput += digit
-                    viewModel.sendDtmf(digit.first())
-                },
+                onDtmfDigit = { digit -> dtmfInput += digit; viewModel.sendDtmf(digit.first()) },
                 onToggleKeypad = { showDtmfKeypad = !showDtmfKeypad },
                 onMuteToggle = { viewModel.toggleMute() },
                 onSpeakerToggle = { viewModel.toggleSpeaker() },
                 onHoldToggle = { viewModel.toggleHold() },
-                onAnswerCall = { viewModel.answerCall() },
-                onDeclineCall = { viewModel.rejectCall() },
                 onEndCall = { viewModel.endCall() }
             )
         }
@@ -198,86 +161,66 @@ fun InCallScreen(
 }
 
 @Composable
-private fun CallBackgroundEffect(callState: CallState, isCallActive: Boolean) {
-    val infiniteTransition = rememberInfiniteTransition(label = "bg")
+private fun AlienAmbientEffect(callState: CallState, isCallActive: Boolean) {
+    val infiniteTransition = rememberInfiniteTransition(label = "ambient")
 
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.5f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(if (callState == CallState.DIALING) 800 else 2000, easing = EaseInOutSine),
-            repeatMode = RepeatMode.Reverse
-        ),
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(30000, easing = LinearEasing), RepeatMode.Restart),
+        label = "rotate"
+    )
+
+    val pulse by infiniteTransition.animateFloat(
+        initialValue = 0.3f, targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(tween(if (callState == CallState.DIALING) 600 else 2000, easing = EaseInOutSine), RepeatMode.Reverse),
         label = "pulse"
     )
 
-    val ringRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(20000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation"
-    )
-
     val stateColor = when {
-        callState == CallState.DIALING -> NexusInCallColors.warning
-        callState == CallState.RINGING -> NexusInCallColors.success
-        callState == CallState.ACTIVE || isCallActive -> NexusInCallColors.primary
-        else -> NexusInCallColors.error
+        callState == CallState.DIALING -> NexusCallTheme.solarOrange
+        callState == CallState.RINGING -> NexusCallTheme.plasmaGreen
+        isCallActive -> NexusCallTheme.neonCyan
+        else -> NexusCallTheme.cosmicPink
     }
 
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val centerX = size.width / 2
-        val centerY = size.height * 0.35f
+        val cx = size.width / 2
+        val cy = size.height / 2
 
-        // Pulsing glow
-        for (i in 1..5) {
-            val radius = 80.dp.toPx() * i * pulseScale * 0.3f
-            val alpha = (0.2f - (i * 0.035f)).coerceAtLeast(0.01f)
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(stateColor.copy(alpha = alpha), Color.Transparent),
-                    center = Offset(centerX, centerY),
-                    radius = radius
-                ),
-                center = Offset(centerX, centerY),
-                radius = radius
-            )
-        }
-
-        // Rotating rings
+        // Orbital rings
         for (i in 1..3) {
-            val ringRadius = 150.dp.toPx() + (i * 60.dp.toPx())
-            rotate(ringRotation + (i * 30f), Offset(centerX, centerY)) {
+            rotate(rotation + i * 40f, Offset(cx, cy)) {
                 drawCircle(
                     brush = Brush.sweepGradient(
-                        colors = listOf(
-                            stateColor.copy(alpha = 0.3f / i),
-                            NexusInCallColors.secondary.copy(alpha = 0.2f / i),
-                            Color.Transparent,
-                            stateColor.copy(alpha = 0.3f / i)
-                        ),
-                        center = Offset(centerX, centerY)
+                        listOf(stateColor.copy(alpha = 0.15f / i), Color.Transparent, stateColor.copy(alpha = 0.1f / i)),
+                        center = Offset(cx, cy)
                     ),
-                    radius = ringRadius,
-                    center = Offset(centerX, centerY),
-                    style = Stroke(width = 1.5.dp.toPx())
+                    radius = 180.dp.toPx() + i * 50.dp.toPx(),
+                    center = Offset(cx, cy),
+                    style = Stroke(1.dp.toPx())
                 )
             }
         }
+
+        // Central glow
+        drawCircle(
+            brush = Brush.radialGradient(
+                listOf(stateColor.copy(alpha = pulse * 0.3f), Color.Transparent),
+                center = Offset(cx, cy),
+                radius = 150.dp.toPx()
+            ),
+            center = Offset(cx, cy)
+        )
     }
 }
 
 @Composable
-private fun CallModalContent(
-    modifier: Modifier,
+private fun NexusCallModal(
     currentCall: CallInfo?,
     callState: CallState,
     audioState: AudioRouteState,
     callDuration: Long,
+    callCost: Double?,
     isCallActive: Boolean,
     showDtmfKeypad: Boolean,
     dtmfInput: String,
@@ -286,366 +229,358 @@ private fun CallModalContent(
     onMuteToggle: () -> Unit,
     onSpeakerToggle: () -> Unit,
     onHoldToggle: () -> Unit,
-    onAnswerCall: () -> Unit,
-    onDeclineCall: () -> Unit,
     onEndCall: () -> Unit
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "modal")
     val borderGlow by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 0.7f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = EaseInOutSine),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "borderGlow"
+        initialValue = 0.4f, targetValue = 0.9f,
+        animationSpec = infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "glow"
     )
 
     Surface(
-        modifier = modifier.shadow(32.dp, RoundedCornerShape(40.dp)),
-        shape = RoundedCornerShape(40.dp),
+        modifier = Modifier
+            .widthIn(max = 320.dp)
+            .shadow(48.dp, RoundedCornerShape(32.dp), ambientColor = NexusCallTheme.neonCyan.copy(alpha = 0.3f)),
+        shape = RoundedCornerShape(32.dp),
         color = Color.Transparent
     ) {
         Box(
             modifier = Modifier
-                .fillMaxSize()
                 .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(NexusInCallColors.glass, NexusInCallColors.background.copy(alpha = 0.98f))
-                    ),
-                    shape = RoundedCornerShape(40.dp)
+                    brush = Brush.verticalGradient(listOf(NexusCallTheme.glass, NexusCallTheme.deepSpace)),
+                    shape = RoundedCornerShape(32.dp)
                 )
                 .border(
-                    width = 2.dp,
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            NexusInCallColors.primary.copy(alpha = borderGlow),
-                            NexusInCallColors.secondary.copy(alpha = borderGlow * 0.7f),
-                            NexusInCallColors.accent.copy(alpha = borderGlow * 0.5f)
-                        )
-                    ),
-                    shape = RoundedCornerShape(40.dp)
+                    1.5.dp,
+                    Brush.linearGradient(listOf(
+                        NexusCallTheme.neonCyan.copy(alpha = borderGlow),
+                        NexusCallTheme.electricPurple.copy(alpha = borderGlow * 0.6f)
+                    )),
+                    RoundedCornerShape(32.dp)
                 )
         ) {
             Column(
-                modifier = Modifier.fillMaxSize().padding(24.dp),
+                modifier = Modifier.padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Status bar
-                StatusBar(callState, isCallActive, currentCall?.simSlot)
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // State chip
-                CallStateChip(callState, isCallActive)
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Caller info
-                CallerInfoSection(
-                    number = currentCall?.number ?: "Unknown",
-                    name = currentCall?.contactName,
-                    duration = if ((callState == CallState.ACTIVE || isCallActive) && callDuration > 0) callDuration else null
-                )
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                // DTMF Display
-                if (showDtmfKeypad && dtmfInput.isNotEmpty()) {
-                    DtmfDisplay(dtmfInput)
-                    Spacer(modifier = Modifier.height(12.dp))
-                }
-
-                // Controls or Keypad
-                if (showDtmfKeypad) {
-                    DtmfKeypad(onDtmfDigit)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    TextButton(onClick = onToggleKeypad) {
-                        Text("Hide Keypad", color = NexusInCallColors.textMuted)
-                    }
-                } else if (callState == CallState.ACTIVE || isCallActive) {
-                    CallControls(audioState, currentCall?.isOnHold == true, onMuteToggle, onSpeakerToggle, onHoldToggle, onToggleKeypad)
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Action buttons
-                CallActions(callState, isCallActive, onAnswerCall, onDeclineCall, onEndCall)
+                // Status chip
+                CallStatusChip(callState, isCallActive)
 
                 Spacer(modifier = Modifier.height(16.dp))
+
+                // Avatar & Info
+                CompactCallerSection(
+                    number = currentCall?.number ?: "Unknown",
+                    name = currentCall?.contactName,
+                    duration = if (isCallActive && callDuration > 0) callDuration else null,
+                    callCost = callCost,
+                    callState = callState,
+                    isCallActive = isCallActive
+                )
+
+                // DTMF display
+                if (showDtmfKeypad && dtmfInput.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    DtmfDisplayCompact(dtmfInput)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Controls or Keypad
+                AnimatedContent(
+                    targetState = showDtmfKeypad,
+                    transitionSpec = { fadeIn() + expandVertically() togetherWith fadeOut() + shrinkVertically() },
+                    label = "controls"
+                ) { showKeypad ->
+                    if (showKeypad) {
+                        CompactDtmfKeypad(onDtmfDigit, onToggleKeypad)
+                    } else if (callState == CallState.ACTIVE || isCallActive) {
+                        CompactCallControls(audioState, currentCall?.isOnHold == true, onMuteToggle, onSpeakerToggle, onHoldToggle, onToggleKeypad)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // End call
+                CompactEndCallButton(onEndCall)
             }
         }
     }
 }
 
 @Composable
-private fun StatusBar(callState: CallState, isCallActive: Boolean, simSlot: Int?) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            val statusColor = when {
-                callState == CallState.ACTIVE || isCallActive -> NexusInCallColors.success
-                callState == CallState.DIALING || callState == CallState.RINGING -> NexusInCallColors.warning
-                else -> NexusInCallColors.textMuted
-            }
-            Box(modifier = Modifier.size(8.dp).background(statusColor, CircleShape))
-            Text(simSlot?.let { "SIM ${it + 1}" } ?: "SIM", color = NexusInCallColors.textSecondary, fontSize = 11.sp)
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Icon(Icons.Outlined.Lock, null, tint = NexusInCallColors.primary.copy(alpha = 0.7f), modifier = Modifier.size(12.dp))
-            Text("HD", color = NexusInCallColors.textMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun CallStateChip(callState: CallState, isCallActive: Boolean) {
-    val infiniteTransition = rememberInfiniteTransition(label = "chip")
-
-    val stateText = when {
-        callState == CallState.DIALING -> "CALLING"
-        callState == CallState.RINGING -> "INCOMING"
-        callState == CallState.ACTIVE || isCallActive -> "CONNECTED"
-        callState == CallState.DISCONNECTED -> "ENDED"
-        else -> "INITIALIZING"
-    }
-
-    val stateColor = when {
-        callState == CallState.DIALING -> NexusInCallColors.warning
-        callState == CallState.RINGING -> NexusInCallColors.success
-        callState == CallState.ACTIVE || isCallActive -> NexusInCallColors.primary
-        else -> NexusInCallColors.error
+private fun CallStatusChip(callState: CallState, isCallActive: Boolean) {
+    val (text, color) = when {
+        callState == CallState.DIALING -> "CALLING" to NexusCallTheme.solarOrange
+        callState == CallState.RINGING -> "INCOMING" to NexusCallTheme.plasmaGreen
+        callState == CallState.ACTIVE || isCallActive -> "LIVE" to NexusCallTheme.neonCyan
+        callState == CallState.DISCONNECTED -> "ENDED" to NexusCallTheme.cosmicPink
+        else -> "..." to NexusCallTheme.textDim
     }
 
     Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = stateColor.copy(alpha = 0.15f),
-        border = BorderStroke(1.dp, stateColor.copy(alpha = 0.3f))
+        shape = RoundedCornerShape(12.dp),
+        color = color.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.4f))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Box(modifier = Modifier.size(6.dp).background(stateColor, CircleShape))
-            Text(stateText, color = stateColor, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            Box(modifier = Modifier.size(6.dp).background(color, CircleShape))
+            Text(text, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
         }
     }
 }
 
 @Composable
-private fun CallerInfoSection(number: String, name: String?, duration: Long?) {
+private fun CompactCallerSection(number: String, name: String?, duration: Long?, callCost: Double?, callState: CallState, isCallActive: Boolean) {
+    val context = LocalContext.current
     val infiniteTransition = rememberInfiniteTransition(label = "avatar")
     val ringRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(animation = tween(8000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(6000, easing = LinearEasing), RepeatMode.Restart),
         label = "ring"
     )
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        // Avatar
-        Box(modifier = Modifier.size(130.dp), contentAlignment = Alignment.Center) {
-            Box(
-                modifier = Modifier.size(130.dp).rotate(ringRotation).border(
-                    2.dp,
-                    Brush.sweepGradient(listOf(NexusInCallColors.primary, NexusInCallColors.secondary, Color.Transparent, NexusInCallColors.primary)),
-                    CircleShape
+    // Load contact photo
+    var contactBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var resolvedName by remember { mutableStateOf(name) }
+
+    LaunchedEffect(number) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val contactUri = android.net.Uri.withAppendedPath(
+                    android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                    android.net.Uri.encode(number)
                 )
+                context.contentResolver.query(
+                    contactUri,
+                    arrayOf(android.provider.ContactsContract.PhoneLookup.PHOTO_URI, android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME),
+                    null, null, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        if (resolvedName == null) {
+                            val nameIdx = cursor.getColumnIndex(android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME)
+                            if (nameIdx >= 0) resolvedName = cursor.getString(nameIdx)
+                        }
+                        val photoIdx = cursor.getColumnIndex(android.provider.ContactsContract.PhoneLookup.PHOTO_URI)
+                        if (photoIdx >= 0) {
+                            cursor.getString(photoIdx)?.let { photoUri ->
+                                context.contentResolver.openInputStream(android.net.Uri.parse(photoUri))?.use {
+                                    contactBitmap = android.graphics.BitmapFactory.decodeStream(it)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    val initial = remember(resolvedName, number) {
+        resolvedName?.firstOrNull { it.isLetter() }?.uppercase()?.toString()
+            ?: number.firstOrNull { it.isDigit() }?.toString() ?: "?"
+    }
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // Compact avatar with rotating ring
+        Box(modifier = Modifier.size(80.dp), contentAlignment = Alignment.Center) {
+            // Rotating gradient ring
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .rotate(ringRotation)
+                    .border(
+                        2.dp,
+                        Brush.sweepGradient(listOf(NexusCallTheme.neonCyan, NexusCallTheme.electricPurple, Color.Transparent, NexusCallTheme.neonCyan)),
+                        CircleShape
+                    )
             )
 
+            // Inner avatar
             Box(
-                modifier = Modifier.size(100.dp).shadow(16.dp, CircleShape).background(
-                    Brush.linearGradient(listOf(NexusInCallColors.surface, NexusInCallColors.backgroundSecondary)),
-                    CircleShape
-                ).border(1.dp, NexusInCallColors.glassBorder, CircleShape),
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(NexusCallTheme.nebula, NexusCallTheme.deepSpace)))
+                    .border(1.dp, NexusCallTheme.textDim.copy(alpha = 0.3f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    (name?.firstOrNull() ?: number.firstOrNull())?.uppercase()?.toString() ?: "?",
-                    color = NexusInCallColors.textPrimary,
-                    fontSize = 40.sp,
-                    fontWeight = FontWeight.Light
-                )
+                val bitmap = contactBitmap
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Text(initial, color = NexusCallTheme.textWhite, fontSize = 24.sp, fontWeight = FontWeight.Light)
+                }
             }
         }
 
-        // Name/Number
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (name != null) {
-                Text(name, color = NexusInCallColors.textPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Text(number, color = NexusInCallColors.textSecondary, fontSize = 14.sp)
-            } else {
-                Text(number, color = NexusInCallColors.textPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            }
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Name & Number
+        val displayName = resolvedName ?: name
+        if (displayName != null) {
+            Text(displayName, color = NexusCallTheme.textWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(number, color = NexusCallTheme.textDim, fontSize = 12.sp)
+        } else {
+            Text(number, color = NexusCallTheme.textWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
 
         // Duration
         duration?.let {
-            Surface(shape = RoundedCornerShape(16.dp), color = NexusInCallColors.glassBackground, border = BorderStroke(1.dp, NexusInCallColors.glassBorder)) {
-                Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(modifier = Modifier.size(6.dp).background(NexusInCallColors.success, CircleShape))
-                    Text(formatDuration(it), color = NexusInCallColors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.Medium, letterSpacing = 2.sp)
+            Spacer(modifier = Modifier.height(6.dp))
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = NexusCallTheme.plasmaGreen.copy(alpha = 0.1f),
+                border = BorderStroke(1.dp, NexusCallTheme.plasmaGreen.copy(alpha = 0.3f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(modifier = Modifier.size(4.dp).background(NexusCallTheme.plasmaGreen, CircleShape))
+                    Text(formatDuration(it), color = NexusCallTheme.plasmaGreen, fontSize = 14.sp, fontWeight = FontWeight.Medium, letterSpacing = 1.sp)
                 }
+            }
+        }
+
+        // Call Cost (only for outgoing calls when billing is active)
+        callCost?.let { cost ->
+            if (cost > 0) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "KSH %.2f".format(cost),
+                    color = NexusCallTheme.solarOrange,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     }
 }
 
 @Composable
-private fun CallControls(
+private fun CompactCallControls(
     audioState: AudioRouteState,
     isOnHold: Boolean,
-    onMuteToggle: () -> Unit,
-    onSpeakerToggle: () -> Unit,
-    onHoldToggle: () -> Unit,
-    onKeypadClick: () -> Unit
+    onMute: () -> Unit,
+    onSpeaker: () -> Unit,
+    onHold: () -> Unit,
+    onKeypad: () -> Unit
 ) {
-    Surface(
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        color = NexusInCallColors.glassBackground,
-        border = BorderStroke(1.dp, NexusInCallColors.glassBorder.copy(alpha = 0.5f))
+        horizontalArrangement = Arrangement.SpaceEvenly
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 12.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            ControlChip(if (audioState.isMuted) Icons.Filled.MicOff else Icons.Filled.Mic, "Mute", audioState.isMuted, NexusInCallColors.error, onMuteToggle)
-            ControlChip(Icons.Filled.Dialpad, "Keypad", false, NexusInCallColors.primary, onKeypadClick)
-            ControlChip(if (audioState.currentRoute == AudioRoute.SPEAKER) Icons.Filled.VolumeUp else Icons.Outlined.VolumeUp, "Speaker", audioState.currentRoute == AudioRoute.SPEAKER, NexusInCallColors.primary, onSpeakerToggle)
-            ControlChip(if (isOnHold) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (isOnHold) "Resume" else "Hold", isOnHold, NexusInCallColors.warning, onHoldToggle)
-        }
+        MiniControlButton(if (audioState.isMuted) Icons.Filled.MicOff else Icons.Filled.Mic, "Mute", audioState.isMuted, NexusCallTheme.cosmicPink, onMute)
+        MiniControlButton(Icons.Filled.Dialpad, "Keypad", false, NexusCallTheme.neonCyan, onKeypad)
+        MiniControlButton(if (audioState.currentRoute == AudioRoute.SPEAKER) Icons.Filled.VolumeUp else Icons.Outlined.VolumeUp, "Speaker", audioState.currentRoute == AudioRoute.SPEAKER, NexusCallTheme.neonCyan, onSpeaker)
+        MiniControlButton(if (isOnHold) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (isOnHold) "Resume" else "Hold", isOnHold, NexusCallTheme.solarOrange, onHold)
     }
 }
 
 @Composable
-private fun ControlChip(icon: ImageVector, label: String, isActive: Boolean, activeColor: Color, onClick: () -> Unit) {
+private fun MiniControlButton(icon: ImageVector, label: String, isActive: Boolean, activeColor: Color, onClick: () -> Unit) {
     val haptic = LocalHapticFeedback.current
 
     Column(
         modifier = Modifier.clickable { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onClick() },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
-            modifier = Modifier.size(48.dp).background(if (isActive) activeColor.copy(alpha = 0.2f) else Color.Transparent, CircleShape)
-                .border(1.5.dp, if (isActive) activeColor else NexusInCallColors.textMuted.copy(alpha = 0.3f), CircleShape),
+            modifier = Modifier
+                .size(44.dp)
+                .background(if (isActive) activeColor.copy(alpha = 0.15f) else Color.Transparent, CircleShape)
+                .border(1.dp, if (isActive) activeColor.copy(alpha = 0.5f) else NexusCallTheme.textDim.copy(alpha = 0.3f), CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, label, tint = if (isActive) activeColor else NexusInCallColors.textSecondary, modifier = Modifier.size(22.dp))
+            Icon(icon, label, tint = if (isActive) activeColor else NexusCallTheme.textSilver, modifier = Modifier.size(20.dp))
         }
-        Text(label, color = if (isActive) activeColor else NexusInCallColors.textMuted, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(label, color = if (isActive) activeColor else NexusCallTheme.textDim, fontSize = 9.sp, fontWeight = FontWeight.Medium)
     }
 }
 
 @Composable
-private fun DtmfDisplay(input: String) {
+private fun DtmfDisplayCompact(input: String) {
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = NexusInCallColors.surface.copy(alpha = 0.5f),
-        border = BorderStroke(1.dp, NexusInCallColors.glassBorder)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(10.dp),
+        color = NexusCallTheme.nebula,
+        border = BorderStroke(1.dp, NexusCallTheme.neonCyan.copy(alpha = 0.3f))
     ) {
-        Text(input, color = NexusInCallColors.primary, fontSize = 22.sp, fontWeight = FontWeight.Medium, letterSpacing = 4.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 10.dp))
+        Text(input, color = NexusCallTheme.neonCyan, fontSize = 18.sp, fontWeight = FontWeight.Medium, letterSpacing = 3.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
     }
 }
 
 @Composable
-private fun DtmfKeypad(onDigitPressed: (String) -> Unit) {
+private fun CompactDtmfKeypad(onDigit: (String) -> Unit, onHide: () -> Unit) {
     val haptic = LocalHapticFeedback.current
     val keys = listOf(listOf("1","2","3"), listOf("4","5","6"), listOf("7","8","9"), listOf("*","0","#"))
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         keys.forEach { row ->
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 row.forEach { digit ->
                     Box(
-                        modifier = Modifier.size(64.dp).background(NexusInCallColors.surface.copy(alpha = 0.4f), CircleShape)
-                            .border(1.dp, NexusInCallColors.glassBorder, CircleShape)
-                            .clickable { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onDigitPressed(digit) },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(NexusCallTheme.nebula.copy(alpha = 0.6f), CircleShape)
+                            .border(1.dp, NexusCallTheme.textDim.copy(alpha = 0.2f), CircleShape)
+                            .clickable { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onDigit(digit) },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(digit, color = NexusInCallColors.textPrimary, fontSize = 24.sp, fontWeight = FontWeight.Light)
+                        Text(digit, color = NexusCallTheme.textWhite, fontSize = 18.sp, fontWeight = FontWeight.Light)
                     }
                 }
             }
         }
+        TextButton(onClick = onHide, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+            Text("Hide", color = NexusCallTheme.textDim, fontSize = 11.sp)
+        }
     }
 }
 
 @Composable
-private fun CallActions(callState: CallState, isCallActive: Boolean, onAnswer: () -> Unit, onDecline: () -> Unit, onEndCall: () -> Unit) {
-    when {
-        callState == CallState.RINGING -> {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                ActionButton(Icons.Default.CallEnd, "Decline", NexusInCallColors.error, false, onDecline)
-                ActionButton(Icons.Default.Call, "Answer", NexusInCallColors.success, true, onAnswer)
-            }
-        }
-        callState == CallState.DISCONNECTED && !isCallActive -> {
-            Text("CALL ENDED", color = NexusInCallColors.error, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-        }
-        else -> EndCallButton(onEndCall)
-    }
-}
-
-@Composable
-private fun ActionButton(icon: ImageVector, label: String, color: Color, isPrimary: Boolean, onClick: () -> Unit) {
+private fun CompactEndCallButton(onClick: () -> Unit) {
     val haptic = LocalHapticFeedback.current
-
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Surface(
-            onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onClick() },
-            modifier = Modifier.size(64.dp).shadow(if (isPrimary) 12.dp else 6.dp, CircleShape, ambientColor = color),
-            shape = CircleShape,
-            color = color
-        ) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                Icon(icon, label, tint = Color.White, modifier = Modifier.size(28.dp))
-            }
-        }
-        Text(label, color = NexusInCallColors.textSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-    }
-}
-
-@Composable
-private fun EndCallButton(onClick: () -> Unit) {
-    val haptic = LocalHapticFeedback.current
-    val infiniteTransition = rememberInfiniteTransition(label = "endCall")
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.2f,
-        targetValue = 0.5f,
-        animationSpec = infiniteRepeatable(animation = tween(1500), repeatMode = RepeatMode.Reverse),
+    val infiniteTransition = rememberInfiniteTransition(label = "end")
+    val glow by infiniteTransition.animateFloat(
+        initialValue = 0.3f, targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse),
         label = "glow"
     )
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(modifier = Modifier.size(76.dp), contentAlignment = Alignment.Center) {
-            Box(modifier = Modifier.size(88.dp).background(Brush.radialGradient(listOf(NexusInCallColors.error.copy(alpha = glowAlpha), Color.Transparent)), CircleShape))
+    Box(contentAlignment = Alignment.Center) {
+        // Glow
+        Box(modifier = Modifier.size(64.dp).background(Brush.radialGradient(listOf(NexusCallTheme.cosmicPink.copy(alpha = glow), Color.Transparent)), CircleShape))
 
-            Surface(
-                onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onClick() },
-                modifier = Modifier.size(64.dp).shadow(12.dp, CircleShape, ambientColor = NexusInCallColors.error),
-                shape = CircleShape,
-                color = NexusInCallColors.error
-            ) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(Icons.Default.CallEnd, "End Call", tint = Color.White, modifier = Modifier.size(28.dp))
-                }
+        Surface(
+            onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onClick() },
+            modifier = Modifier.size(52.dp).shadow(8.dp, CircleShape, ambientColor = NexusCallTheme.cosmicPink),
+            shape = CircleShape,
+            color = NexusCallTheme.cosmicPink
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Icon(Icons.Default.CallEnd, "End", tint = Color.White, modifier = Modifier.size(24.dp))
             }
         }
-        Text("End Call", color = NexusInCallColors.textSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
     }
 }
 
 private fun formatDuration(seconds: Long): String {
-    val hours = seconds / 3600
-    val minutes = (seconds % 3600) / 60
-    val secs = seconds % 60
-    return if (hours > 0) String.format("%d:%02d:%02d", hours, minutes, secs) else String.format("%02d:%02d", minutes, secs)
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return if (h > 0) String.format("%d:%02d:%02d", h, m, s) else String.format("%02d:%02d", m, s)
 }
 

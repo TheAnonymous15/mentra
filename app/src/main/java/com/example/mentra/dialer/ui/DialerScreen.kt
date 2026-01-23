@@ -96,6 +96,12 @@ fun DialerScreen(
         }
     }
 
+    // Mark call UI as showing when UnifiedCallModal is displayed
+    // This prevents CallForegroundService from launching duplicate InCallActivity
+    LaunchedEffect(showSimModal) {
+        viewModel.setCallUiShowing(showSimModal)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -255,21 +261,27 @@ fun DialerScreen(
         }
     }
 
-    // Modals
+    // Unified Call Modal - handles SIM selection and call states
     if (showSimModal && pendingCallNumber != null) {
-        SimSelectionModal(
-            sims = availableSims,
-            phoneNumber = pendingCallNumber!!,
-            contactName = pendingCallContactName,
-            contactPhotoUri = pendingCallContactPhotoUri,
-            onSimSelected = { simSlot ->
+        UnifiedCallModal(
+            data = UnifiedCallData(
+                phoneNumber = pendingCallNumber!!,
+                contactName = pendingCallContactName,
+                photoUri = pendingCallContactPhotoUri,
+                direction = CallDirection.OUTGOING
+            ),
+            availableSims = availableSims,
+            onDismiss = {
                 showSimModal = false
-                viewModel.placeCallWithSim(pendingCallNumber!!, simSlot)
                 pendingCallNumber = null
                 pendingCallContactName = null
                 pendingCallContactPhotoUri = null
             },
-            onDismiss = {
+            onSimSelected = { simSlot ->
+                viewModel.placeCallWithSim(pendingCallNumber!!, simSlot)
+            },
+            onEndCall = {
+                viewModel.endCall()
                 showSimModal = false
                 pendingCallNumber = null
                 pendingCallContactName = null

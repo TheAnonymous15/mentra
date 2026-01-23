@@ -93,12 +93,21 @@ fun NexusCallModal(
     val context = LocalContext.current
     val dialerManager = remember { com.example.mentra.dialer.DialerManagerProvider.getDialerManager() }
 
-    var modalState by remember { mutableStateOf(CallModalState.SIM_SELECTION) }
-    var selectedSim by remember { mutableStateOf(-1) }
+    // Auto-skip SIM selection if only one SIM available
+    val initialState = if (availableSims.size == 1) CallModalState.CALLING else CallModalState.SIM_SELECTION
+    var modalState by remember { mutableStateOf(initialState) }
+    var selectedSim by remember { mutableStateOf(if (availableSims.size == 1) availableSims[0].slotIndex else -1) }
     var callDuration by remember { mutableStateOf(0L) }
     var isMuted by remember { mutableStateOf(false) }
     var isSpeaker by remember { mutableStateOf(false) }
     var showDialpad by remember { mutableStateOf(false) }
+
+    // Auto-place call when single SIM (skipping selection)
+    LaunchedEffect(Unit) {
+        if (availableSims.size == 1) {
+            onCall(availableSims[0].slotIndex)
+        }
+    }
 
     // Observe call cost from DialerManager for outgoing calls
     val callCost by dialerManager?.totalCallCost?.collectAsState() ?: remember { mutableStateOf(0.0) }

@@ -282,7 +282,7 @@ fun ConversationScreen(
         }
     }
 
-    // Call Modal - SIM selection only
+    // Call Modal - Auto-call if single SIM, otherwise show selection
     if (showCallModal) {
         val contactName = allMessages.firstOrNull()?.let {
             // Try to get contact name from the first message
@@ -298,23 +298,31 @@ fun ConversationScreen(
             )
         }
 
-        // Only show SIM selection modal - close after call is placed
-        // InCallActivity will handle the in-call UI
-        NexusSimSelectionModal(
-            phoneNumber = phoneNumber,
-            contactName = contactName,
-            availableSims = simInfoList,
-            onDismiss = {
-                showCallModal = false
-            },
-            onSimSelected = { simSlot ->
-                // Place the call and close modal immediately
-                // CallForegroundService will launch InCallActivity after 0.9s
+        // If only one SIM, auto-place call without showing modal
+        if (simInfoList.size == 1) {
+            LaunchedEffect(Unit) {
                 val dialerManager = DialerManagerProvider.getDialerManager()
-                dialerManager?.placeCall(phoneNumber, simSlot)
+                dialerManager?.placeCall(phoneNumber, simInfoList[0].slotIndex)
                 showCallModal = false
             }
-        )
+        } else {
+            // Multiple SIMs - show selection modal
+            NexusSimSelectionModal(
+                phoneNumber = phoneNumber,
+                contactName = contactName,
+                availableSims = simInfoList,
+                onDismiss = {
+                    showCallModal = false
+                },
+                onSimSelected = { simSlot ->
+                    // Place the call and close modal immediately
+                    // CallForegroundService will launch InCallActivity after 0.9s
+                    val dialerManager = DialerManagerProvider.getDialerManager()
+                    dialerManager?.placeCall(phoneNumber, simSlot)
+                    showCallModal = false
+                }
+            )
+        }
     }
 }
 

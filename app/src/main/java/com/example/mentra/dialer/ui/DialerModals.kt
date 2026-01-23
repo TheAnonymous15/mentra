@@ -67,6 +67,18 @@ fun SimSelectionModal(
     val context = LocalContext.current
     val infiniteTransition = rememberInfiniteTransition(label = "simModal")
 
+    // Auto-select SIM if only one available
+    LaunchedEffect(sims) {
+        if (sims.size == 1) {
+            onSimSelected(sims[0].slotIndex)
+        }
+    }
+
+    // Don't show modal if only one SIM (auto-selected above)
+    if (sims.size == 1) {
+        return
+    }
+
     // Load contact photo - try provided URI first, then look up by phone number
     var contactBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
 

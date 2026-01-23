@@ -132,6 +132,14 @@ class DialerViewModel @Inject constructor(
         _showDefaultDialerPrompt.value = true
     }
 
+    /**
+     * Mark whether call UI is currently showing
+     * This prevents CallForegroundService from launching duplicate InCallActivity
+     */
+    fun setCallUiShowing(showing: Boolean) {
+        dialerManager.setCallUiShowing(showing)
+    }
+
     // ============================================
     // DIALER INPUT
     // ============================================

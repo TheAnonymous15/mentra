@@ -5,7 +5,10 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
-import com.example.mentra.dialer.ui.InCallScreen
+import com.example.mentra.dialer.ui.CallDirection
+import com.example.mentra.dialer.ui.UnifiedCallData
+import com.example.mentra.dialer.ui.UnifiedCallModal
+import com.example.mentra.dialer.ui.UnifiedCallState
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -13,7 +16,7 @@ import javax.inject.Inject
  * In-Call Activity
  *
  * Activity that displays during an active call.
- * Manages proximity sensor and screen behavior.
+ * Uses UnifiedCallModal for all call scenarios.
  */
 @AndroidEntryPoint
 class InCallActivity : ComponentActivity() {
@@ -30,8 +33,20 @@ class InCallActivity : ComponentActivity() {
         // Keep screen on during call
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        // Get call info from intent
+        val phoneNumber = intent.getStringExtra("phone_number") ?: ""
+        val contactName = intent.getStringExtra("contact_name")
+        val photoUri = intent.getStringExtra("photo_uri")
+
         setContent {
             val callState by dialerManager.callState.collectAsState()
+            val currentCall by dialerManager.currentCall.collectAsState()
+            val availableSims by dialerManager.availableSims.collectAsState()
+            val audioState by dialerManager.audioState.collectAsState()
+
+            // Determine the display number/name
+            val displayNumber = currentCall?.number ?: phoneNumber
+            val displayName = currentCall?.contactName ?: contactName
 
             // Close activity when call ends
             LaunchedEffect(callState) {
@@ -40,10 +55,34 @@ class InCallActivity : ComponentActivity() {
                 }
             }
 
-            InCallScreen(
-                onCallEnded = {
+            // Use UnifiedCallModal for the call UI
+            UnifiedCallModal(
+                data = UnifiedCallData(
+                    phoneNumber = displayNumber,
+                    contactName = displayName,
+                    photoUri = photoUri,
+                    direction = CallDirection.OUTGOING, // Outgoing since this is launched for active calls
+                    simSlot = currentCall?.simSlot ?: -1
+                ),
+                availableSims = availableSims,
+                initialState = when (callState) {
+                    CallState.DIALING, CallState.INIT -> UnifiedCallState.DIALING
+                    CallState.RINGING -> UnifiedCallState.CONNECTING
+                    CallState.ACTIVE -> UnifiedCallState.ACTIVE
+                    CallState.DISCONNECTED, CallState.IDLE -> UnifiedCallState.ENDED
+                },
+                onDismiss = { finish() },
+                onSimSelected = null, // SIM already selected
+                onAnswer = null, // Not incoming
+                onReject = null, // Not incoming
+                onEndCall = {
+                    dialerManager.endCall()
                     finish()
-                }
+                },
+                onMuteToggle = { _ -> dialerManager.toggleMute() },
+                onSpeakerToggle = { _ -> dialerManager.toggleSpeaker() },
+                onHoldToggle = { _ -> dialerManager.toggleHold() },
+                onDtmfDigit = { digit -> dialerManager.sendDtmf(digit) }
             )
         }
     }

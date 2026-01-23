@@ -315,16 +315,20 @@ fun ShellScreen(
                 visible = showKeyboard,
                 onKeyPress = { key ->
                     val currentInput = uiState.input
-                    val newInput = currentInput.substring(0, cursorPosition) + key + currentInput.substring(cursorPosition)
+                    // Ensure cursorPosition is within bounds
+                    val safePosition = cursorPosition.coerceIn(0, currentInput.length)
+                    val newInput = currentInput.substring(0, safePosition) + key + currentInput.substring(safePosition)
                     viewModel.updateInput(newInput)
-                    cursorPosition += key.length
+                    cursorPosition = safePosition + key.length
                 },
                 onBackspace = {
-                    if (cursorPosition > 0) {
-                        val currentInput = uiState.input
-                        val newInput = currentInput.substring(0, cursorPosition - 1) + currentInput.substring(cursorPosition)
+                    val currentInput = uiState.input
+                    // Ensure cursorPosition is within bounds
+                    val safePosition = cursorPosition.coerceIn(0, currentInput.length)
+                    if (safePosition > 0) {
+                        val newInput = currentInput.substring(0, safePosition - 1) + currentInput.substring(safePosition)
                         viewModel.updateInput(newInput)
-                        cursorPosition--
+                        cursorPosition = safePosition - 1
                     }
                 },
                 onEnter = {
@@ -725,9 +729,12 @@ private fun CurrentInputLineCustom(
             modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Ensure cursor position is within bounds
+            val safeCursorPosition = cursorPosition.coerceIn(0, input.length)
+
             // Text before cursor
-            val textBeforeCursor = input.take(cursorPosition)
-            val textAfterCursor = input.drop(cursorPosition)
+            val textBeforeCursor = input.take(safeCursorPosition)
+            val textAfterCursor = input.drop(safeCursorPosition)
 
             Text(
                 text = textBeforeCursor,

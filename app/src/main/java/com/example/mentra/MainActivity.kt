@@ -8,7 +8,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.*
 import com.example.mentra.core.common.permissions.PermissionManager
 import com.example.mentra.dialer.ui.DialerScreen
-import com.example.mentra.dialer.ui.InCallScreen
 import com.example.mentra.health.ui.HealthScreen
 import com.example.mentra.messaging.MessagePreloader
 import com.example.mentra.messaging.ui.ConversationScreen
@@ -137,14 +136,8 @@ fun MentraApp(
         currentScreen == "dialer" -> {
             DialerScreen(
                 onNavigateToInCall = {
-                    currentScreen = "incall"
-                }
-            )
-        }
-        currentScreen == "incall" -> {
-            InCallScreen(
-                onCallEnded = {
-                    currentScreen = "dialer"
+                    // In-call UI is now handled by UnifiedCallModal dialog
+                    // No navigation needed - the modal appears over the current screen
                 }
             )
         }

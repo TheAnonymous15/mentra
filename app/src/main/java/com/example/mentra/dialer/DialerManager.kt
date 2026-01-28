@@ -432,6 +432,47 @@ class DialerManager @Inject constructor(
         }
     }
 
+    /**
+     * Silence the ringer for incoming call
+     * Called when user presses volume button during incoming call
+     */
+    fun silenceRinger(): Boolean {
+        return try {
+            android.util.Log.d("DialerManager", "Silencing ringer")
+
+            // Method 1: Use TelecomManager to silence ringer (Android M+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                telecomManager?.silenceRinger()
+                android.util.Log.d("DialerManager", "Silenced via TelecomManager")
+            }
+
+            // Method 2: Use AudioManager to set ringer mode to silent temporarily
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            audioManager?.let { am ->
+                // Store current ringer mode to restore later if needed
+                val currentMode = am.ringerMode
+                if (currentMode == android.media.AudioManager.RINGER_MODE_NORMAL) {
+                    // Set to vibrate (or silent if vibrate not available)
+                    am.ringerMode = android.media.AudioManager.RINGER_MODE_VIBRATE
+                    android.util.Log.d("DialerManager", "Changed ringer mode to vibrate")
+                }
+            }
+
+            // Method 3: Stop any active ringtone via CallForegroundService broadcast
+            try {
+                val stopIntent = Intent("com.example.mentra.SILENCE_RINGER")
+                context.sendBroadcast(stopIntent)
+            } catch (e: Exception) {
+                android.util.Log.e("DialerManager", "Failed to send silence broadcast", e)
+            }
+
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("DialerManager", "Failed to silence ringer", e)
+            false
+        }
+    }
+
     // ============================================
     // CALL UI STATE MANAGEMENT
     // ============================================

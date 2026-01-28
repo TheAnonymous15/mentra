@@ -151,6 +151,11 @@ fun ShellScreen(
         cursorPosition = uiState.input.length
     }
 
+    // Check for pending incoming calls when shell becomes visible
+    LaunchedEffect(Unit) {
+        viewModel.onShellVisible()
+    }
+
     // Settings menu state
     var showSettings by remember { mutableStateOf(false) }
 
@@ -1229,6 +1234,40 @@ class ShellViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Called when shell screen becomes visible
+     * Checks for any pending incoming calls and displays them
+     */
+    fun onShellVisible() {
+        viewModelScope.launch {
+            // Check for any pending incoming call that needs to be displayed
+            if (shellIncomingCallHandler.isShellIncomingCallEnabled()) {
+                val pendingOutputs = shellIncomingCallHandler.getPendingCallDisplay()
+                if (pendingOutputs.isNotEmpty()) {
+                    android.util.Log.d("ShellViewModel", "Shell became visible with pending call, displaying ${pendingOutputs.size} outputs")
+                    pendingOutputs.forEach { output ->
+                        addOutput(OutputItem(
+                            command = "",
+                            timestamp = getCurrentTimeString(),
+                            result = ShellResult(
+                                status = when (output.type) {
+                                    com.example.mentra.shell.models.ShellOutputType.SUCCESS -> com.example.mentra.shell.models.ResultStatus.SUCCESS
+                                    com.example.mentra.shell.models.ShellOutputType.ERROR -> com.example.mentra.shell.models.ResultStatus.FAILURE
+                                    com.example.mentra.shell.models.ShellOutputType.WARNING -> com.example.mentra.shell.models.ResultStatus.INVALID_COMMAND
+                                    com.example.mentra.shell.models.ShellOutputType.PROMPT -> com.example.mentra.shell.models.ResultStatus.REQUIRES_CONFIRMATION
+                                    else -> com.example.mentra.shell.models.ResultStatus.SUCCESS
+                                },
+                                message = output.text
+                            )
+                        ))
+                    }
+                    // Refresh state to ensure UI is in sync
+                    shellIncomingCallHandler.refreshCallState()
+                }
+            }
+        }
+    }
+
     private fun loadContacts() {
         viewModelScope.launch {
             _contacts.value = messagingService.getAllContacts()
@@ -1507,6 +1546,14 @@ class ShellViewModel @Inject constructor(
                 } else {
                     // Regular shell command
                     val result = shellEngine.execute(command)
+
+                    // Check if screen should be cleared (from package manager)
+                    if (result.data == "clear_screen" || result.message == "CLEAR_SCREEN") {
+                        _uiState.value = ShellUiState()
+                        messagingHandler.reset()
+                        _uiState.value = _uiState.value.copy(isExecuting = false)
+                        return@launch
+                    }
 
                     // Check if calculator UI should be shown
                     if (result.data == "SHOW_CALCULATOR_UI") {

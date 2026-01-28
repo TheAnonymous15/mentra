@@ -179,6 +179,123 @@ fun UnifiedCallModal(
     // Track if we've ever seen OFFHOOK state (call actually connected to network)
     var hasSeenOffhook by remember { mutableStateOf(false) }
 
+    // Track if ringtone has been silenced by volume button
+    var isRingtoneSilenced by remember { mutableStateOf(false) }
+
+    // Monitor volume changes using ContentObserver (more reliable than broadcast)
+    DisposableEffect(callState) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+        var lastRingerVolume = audioManager?.getStreamVolume(android.media.AudioManager.STREAM_RING) ?: -1
+
+        val volumeObserver = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                super.onChange(selfChange)
+
+                if (callState == UnifiedCallState.RINGING_INCOMING && !isRingtoneSilenced) {
+                    val currentVolume = audioManager?.getStreamVolume(android.media.AudioManager.STREAM_RING) ?: -1
+
+                    android.util.Log.d("UnifiedCallModal", "Volume changed: $lastRingerVolume -> $currentVolume")
+
+                    // Volume was changed (pressed volume button)
+                    if (currentVolume != lastRingerVolume) {
+                        android.util.Log.d("UnifiedCallModal", "Volume button detected via ContentObserver - silencing ringtone")
+                        isRingtoneSilenced = true
+
+                        // Stop ringtone
+                        try {
+                            val stopRingtoneIntent = Intent("com.example.mentra.STOP_RINGTONE")
+                            context.sendBroadcast(stopRingtoneIntent)
+                        } catch (e: Exception) {
+                            android.util.Log.e("UnifiedCallModal", "Failed to send stop ringtone broadcast", e)
+                        }
+
+                        dialerManager?.silenceRinger()
+                    }
+                    lastRingerVolume = currentVolume
+                }
+            }
+        }
+
+        // Register ContentObserver when in ringing state
+        if (callState == UnifiedCallState.RINGING_INCOMING) {
+            try {
+                context.contentResolver.registerContentObserver(
+                    android.provider.Settings.System.CONTENT_URI,
+                    true,
+                    volumeObserver
+                )
+                android.util.Log.d("UnifiedCallModal", "Registered volume ContentObserver")
+            } catch (e: Exception) {
+                android.util.Log.e("UnifiedCallModal", "Failed to register volume observer", e)
+            }
+        }
+
+        onDispose {
+            try {
+                context.contentResolver.unregisterContentObserver(volumeObserver)
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Volume button listener to silence incoming call
+    DisposableEffect(callState) {
+        val volumeReceiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                android.util.Log.d("UnifiedCallModal", "Volume receiver got action: ${intent?.action}")
+
+                // Listen for volume changes during incoming call ringing
+                if (callState == UnifiedCallState.RINGING_INCOMING && !isRingtoneSilenced) {
+                    val action = intent?.action ?: return
+
+                    if (action == "android.media.VOLUME_CHANGED_ACTION" ||
+                        action == android.media.AudioManager.RINGER_MODE_CHANGED_ACTION ||
+                        action == "android.media.STREAM_MUTE_CHANGED_ACTION") {
+
+                        android.util.Log.d("UnifiedCallModal", "Volume button pressed - silencing ringtone")
+                        isRingtoneSilenced = true
+
+                        // Stop ringtone and vibration via CallForegroundService
+                        try {
+                            val stopRingtoneIntent = Intent("com.example.mentra.STOP_RINGTONE")
+                            ctx?.sendBroadcast(stopRingtoneIntent)
+                        } catch (e: Exception) {
+                            android.util.Log.e("UnifiedCallModal", "Failed to send stop ringtone broadcast", e)
+                        }
+
+                        // Also try to stop via DialerManager
+                        dialerManager?.silenceRinger()
+                    }
+                }
+            }
+        }
+
+        // Only register when in ringing state
+        if (callState == UnifiedCallState.RINGING_INCOMING) {
+            val filter = IntentFilter().apply {
+                addAction("android.media.VOLUME_CHANGED_ACTION")
+                addAction(android.media.AudioManager.RINGER_MODE_CHANGED_ACTION)
+                addAction("android.media.STREAM_MUTE_CHANGED_ACTION")
+            }
+            try {
+                // Use RECEIVER_EXPORTED for system broadcasts (volume changes are system-level)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(volumeReceiver, filter, android.content.Context.RECEIVER_EXPORTED)
+                } else {
+                    context.registerReceiver(volumeReceiver, filter)
+                }
+                android.util.Log.d("UnifiedCallModal", "Registered volume receiver for incoming call")
+            } catch (e: Exception) {
+                android.util.Log.e("UnifiedCallModal", "Failed to register volume receiver", e)
+            }
+        }
+
+        onDispose {
+            try {
+                context.unregisterReceiver(volumeReceiver)
+            } catch (_: Exception) {}
+        }
+    }
+
     // Phone state listener for call state detection
     DisposableEffect(Unit) {
         val callStateReceiver = object : BroadcastReceiver() {
@@ -217,16 +334,27 @@ fun UnifiedCallModal(
                         }
                         TelephonyManager.EXTRA_STATE_OFFHOOK -> {
                             hasSeenOffhook = true
-                            if (!isCallActive) {
+
+                            // For incoming calls, OFFHOOK means answered - start timer immediately
+                            // For outgoing calls, OFFHOOK means dialing started - don't start timer yet
+                            if (data.direction == CallDirection.INCOMING) {
+                                if (!isCallActive) {
+                                    isCallActive = true
+                                    if (callConnectedTime == 0L) {
+                                        callConnectedTime = System.currentTimeMillis()
+                                    }
+                                }
+                            } else {
+                                // For outgoing, just mark as active but don't set connect time
+                                // The connect time will be set by the connection detection logic
                                 isCallActive = true
-                                if (callConnectedTime == 0L) {
-                                    callConnectedTime = System.currentTimeMillis()
-                                }
-                                if (callState == UnifiedCallState.DIALING ||
-                                    callState == UnifiedCallState.CONNECTING ||
-                                    callState == UnifiedCallState.RINGING_INCOMING) {
-                                    callState = UnifiedCallState.ACTIVE
-                                }
+                            }
+
+                            // Transition UI state to ACTIVE
+                            if (callState == UnifiedCallState.DIALING ||
+                                callState == UnifiedCallState.CONNECTING ||
+                                callState == UnifiedCallState.RINGING_INCOMING) {
+                                callState = UnifiedCallState.ACTIVE
                             }
                         }
                         TelephonyManager.EXTRA_STATE_RINGING -> {
@@ -239,10 +367,18 @@ fun UnifiedCallModal(
                 }
             }
         }
-        context.registerReceiver(
-            callStateReceiver,
-            IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
-        )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(
+                callStateReceiver,
+                IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED),
+                android.content.Context.RECEIVER_EXPORTED
+            )
+        } else {
+            context.registerReceiver(
+                callStateReceiver,
+                IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
+            )
+        }
         onDispose {
             try { context.unregisterReceiver(callStateReceiver) } catch (_: Exception) {}
         }
@@ -255,17 +391,49 @@ fun UnifiedCallModal(
         }
     }
 
-    // Duration timer
-    LaunchedEffect(isCallActive, callConnectedTime) {
-        if (isCallActive && callConnectedTime > 0) {
-            while (isCallActive) {
-                callDuration = (System.currentTimeMillis() - callConnectedTime) / 1000
-                if (callDuration < 0 || callDuration > 86400) {
-                    callConnectedTime = System.currentTimeMillis()
-                    callDuration = 0
+    // For outgoing calls: Detect when call actually connects
+    // We check the DialerManager's call state for ACTIVE state
+    LaunchedEffect(callState, isCallActive) {
+        if (data.direction == CallDirection.OUTGOING &&
+            callState == UnifiedCallState.ACTIVE &&
+            callConnectedTime == 0L &&
+            isCallActive) {
+
+            // Check DialerManager for actual call state
+            val dmCallState = dialerManager?.callState?.value
+
+            if (dmCallState == com.example.mentra.dialer.CallState.ACTIVE) {
+                // Call is actually connected
+                callConnectedTime = System.currentTimeMillis()
+                android.util.Log.d("UnifiedCallModal", "Outgoing call connected - starting timer")
+            } else {
+                // Poll for connection - check every 500ms
+                while (callState == UnifiedCallState.ACTIVE && callConnectedTime == 0L) {
+                    delay(500)
+                    val currentDmState = dialerManager?.callState?.value
+                    if (currentDmState == com.example.mentra.dialer.CallState.ACTIVE) {
+                        callConnectedTime = System.currentTimeMillis()
+                        android.util.Log.d("UnifiedCallModal", "Outgoing call connected (polled) - starting timer")
+                        break
+                    }
                 }
+            }
+        }
+    }
+
+    // Duration timer - only starts when call is actually connected
+    // callConnectedTime is set when OFFHOOK state is received (incoming) or detected via DialerManager (outgoing)
+    LaunchedEffect(callState, callConnectedTime) {
+        // Only run timer when in ACTIVE state AND we have a valid connection time
+        if (callState == UnifiedCallState.ACTIVE && callConnectedTime > 0) {
+            while (callState == UnifiedCallState.ACTIVE) {
+                val elapsed = System.currentTimeMillis() - callConnectedTime
+                callDuration = if (elapsed > 0) elapsed / 1000 else 0
                 delay(1000)
             }
+        } else {
+            // Reset duration to 0 if not connected
+            callDuration = 0
         }
     }
 

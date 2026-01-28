@@ -134,7 +134,12 @@ class SmsReceiverService : Service() {
 
         val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
         filter.priority = IntentFilter.SYSTEM_HIGH_PRIORITY
-        registerReceiver(smsReceiver, filter)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            // SMS_RECEIVED is a system broadcast, needs RECEIVER_EXPORTED
+            registerReceiver(smsReceiver, filter, RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(smsReceiver, filter)
+        }
     }
 
     private fun unregisterSmsReceiver() {

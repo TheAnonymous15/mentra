@@ -53,7 +53,12 @@ class IncomingCallHandler @Inject constructor(
 
         try {
             val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
-            context.registerReceiver(phoneStateReceiver, filter)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                // System broadcasts like PHONE_STATE need RECEIVER_EXPORTED
+                context.registerReceiver(phoneStateReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                context.registerReceiver(phoneStateReceiver, filter)
+            }
             isReceiverRegistered = true
             Log.d(TAG, "Started listening for incoming calls")
         } catch (e: Exception) {

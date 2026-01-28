@@ -10,6 +10,7 @@ import com.example.mentra.shell.apps.CacheState
 import com.example.mentra.shell.apps.LaunchResult
 import com.example.mentra.shell.calculator.ShellCalculator
 import com.example.mentra.shell.models.*
+import com.example.mentra.shell.packages.PackageManager as MentraPackageManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.withTimeout
 import javax.inject.Inject
@@ -26,7 +27,8 @@ class CommandExecutor @Inject constructor(
     private val contextManager: ContextManager,
     private val actionRouter: ActionRouter,
     private val appCacheService: AppCacheService,
-    private val calculator: ShellCalculator
+    private val calculator: ShellCalculator,
+    private val packageManager: MentraPackageManager
 ) {
 
     /**
@@ -44,6 +46,31 @@ class CommandExecutor @Inject constructor(
 
             // Add to history
             contextManager.addToHistory(command)
+
+            // Handle package manager commands (pip, npm, pkg, ls, cd, etc.)
+            if (packageManager.isPackageCommand(commandText)) {
+                val outputs = packageManager.handleCommand(commandText)
+
+                // Check for special commands like 'clear'
+                val clearCommand = outputs.any { it.text == "CLEAR_SCREEN" }
+                if (clearCommand) {
+                    return ShellResult(
+                        status = ResultStatus.SUCCESS,
+                        message = "CLEAR_SCREEN",
+                        data = "clear_screen",
+                        executionTime = System.currentTimeMillis() - startTime
+                    )
+                }
+
+                val message = outputs.joinToString("\n") { it.text }
+                val hasError = outputs.any { it.type == ShellOutputType.ERROR }
+                return ShellResult(
+                    status = if (hasError) ResultStatus.FAILURE else ResultStatus.SUCCESS,
+                    message = message,
+                    data = outputs,
+                    executionTime = System.currentTimeMillis() - startTime
+                )
+            }
 
             // Handle built-in shell commands FIRST (before validation)
             // This allows special commands like 'sms --ui' to bypass strict validation

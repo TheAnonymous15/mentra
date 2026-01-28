@@ -102,7 +102,11 @@ fun InCallScreen(
                 }
             }
         }
-        context.registerReceiver(callStateReceiver, IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED))
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(callStateReceiver, IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED), android.content.Context.RECEIVER_EXPORTED)
+        } else {
+            context.registerReceiver(callStateReceiver, IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED))
+        }
         onDispose { try { context.unregisterReceiver(callStateReceiver) } catch (_: Exception) {} }
     }
 

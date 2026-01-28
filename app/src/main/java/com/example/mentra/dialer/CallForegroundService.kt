@@ -52,6 +52,8 @@ class CallForegroundService : Service() {
         const val ACTION_REJECT = "com.example.mentra.REJECT_CALL"
         const val ACTION_END = "com.example.mentra.END_CALL"
         const val ACTION_STOP = "com.example.mentra.STOP_CALL_SERVICE"
+        const val ACTION_SILENCE = "com.example.mentra.SILENCE_RINGER"
+        const val ACTION_STOP_RINGTONE = "com.example.mentra.STOP_RINGTONE"
 
         // Extras
         const val EXTRA_PHONE_NUMBER = "phone_number"
@@ -116,12 +118,38 @@ class CallForegroundService : Service() {
     private var currentPhoneNumber: String? = null
     private var currentContactName: String? = null
 
+    // Silence broadcast receiver for volume button press
+    private val silenceReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                ACTION_SILENCE, ACTION_STOP_RINGTONE -> {
+                    Log.d(TAG, "Silence broadcast received - stopping ringtone")
+                    if (isRinging) {
+                        stopRingtone()
+                        isRinging = false
+                    }
+                }
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "CallForegroundService created")
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         createNotificationChannel()
+
+        // Register silence receiver with proper flags for Android 13+
+        val filter = android.content.IntentFilter().apply {
+            addAction(ACTION_SILENCE)
+            addAction(ACTION_STOP_RINGTONE)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(silenceReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(silenceReceiver, filter)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -149,6 +177,8 @@ class CallForegroundService : Service() {
             }
         }
 
+
+
         return START_NOT_STICKY
     }
 
@@ -158,6 +188,14 @@ class CallForegroundService : Service() {
         Log.d(TAG, "CallForegroundService destroyed")
         stopRingtone()
         releaseAudioFocus()
+
+        // Unregister silence receiver
+        try {
+            unregisterReceiver(silenceReceiver)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering silence receiver", e)
+        }
+
         super.onDestroy()
     }
 

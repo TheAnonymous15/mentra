@@ -1,6 +1,7 @@
 package com.example.mentra.shell.calling
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
 import android.provider.ContactsContract
 import android.telephony.SmsManager
@@ -67,6 +68,10 @@ class ShellIncomingCallHandler @Inject constructor(
     // Call start time for duration tracking
     private var callStartTime: Long = 0L
 
+    // Direct phone state receiver for faster detection
+    private var phoneStateReceiver: android.content.BroadcastReceiver? = null
+    private var isReceiverRegistered = false
+
     init {
         // Observe incoming call state when shell handling is enabled
         scope.launch {
@@ -84,6 +89,142 @@ class ShellIncomingCallHandler @Inject constructor(
                 }
             }
         }
+
+        // Also observe DialerManager call state for better call end detection
+        scope.launch {
+            dialerManager.callState.collect { callState ->
+                if (shellSettings.inShellIncomingCall.value) {
+                    when (callState) {
+                        com.example.mentra.dialer.CallState.IDLE,
+                        com.example.mentra.dialer.CallState.DISCONNECTED -> {
+                            // Call ended - reset shell state if not awaiting quick reply
+                            val currentState = _shellCallState.value
+                            if (currentState !is ShellIncomingCallState.AwaitingQuickReply &&
+                                currentState !is ShellIncomingCallState.Idle) {
+                                android.util.Log.d("ShellIncomingCallHandler",
+                                    "Call ended via DialerManager - resetting state")
+                                _shellCallState.value = ShellIncomingCallState.Idle
+                                _awaitingQuickReply.value = false
+                                isSpeaker = false
+                                isMuted = false
+                            }
+                        }
+                        else -> { /* Other states handled by IncomingCallHandler flow */ }
+                    }
+                }
+            }
+        }
+
+        // Register direct phone state receiver for realtime detection
+        registerPhoneStateReceiver()
+    }
+
+    /**
+     * Register direct phone state receiver for faster incoming call detection
+     */
+    private fun registerPhoneStateReceiver() {
+        if (isReceiverRegistered) return
+
+        phoneStateReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action == android.telephony.TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
+                    val state = intent.getStringExtra(android.telephony.TelephonyManager.EXTRA_STATE)
+                    val incomingNumber = intent.getStringExtra(android.telephony.TelephonyManager.EXTRA_INCOMING_NUMBER)
+
+                    android.util.Log.d("ShellIncomingCallHandler",
+                        "Direct phone state: $state, number: $incomingNumber, shellEnabled: ${shellSettings.inShellIncomingCall.value}")
+
+                    if (!shellSettings.inShellIncomingCall.value) return
+
+                    when (state) {
+                        android.telephony.TelephonyManager.EXTRA_STATE_RINGING -> {
+                            // Incoming call - update immediately
+                            val number = incomingNumber ?: lastIncomingNumber ?: "Unknown"
+                            val contactName = lookupContactName(number)
+                            lastIncomingNumber = number
+                            lastIncomingName = contactName
+                            lastSimSlot = detectSimSlot()
+
+                            if (_shellCallState.value !is ShellIncomingCallState.Ringing) {
+                                _shellCallState.value = ShellIncomingCallState.Ringing(
+                                    phoneNumber = number,
+                                    contactName = contactName,
+                                    simSlot = lastSimSlot,
+                                    startTime = System.currentTimeMillis()
+                                )
+                                android.util.Log.d("ShellIncomingCallHandler",
+                                    "Shell incoming call detected: $number")
+                            }
+                        }
+                        android.telephony.TelephonyManager.EXTRA_STATE_OFFHOOK -> {
+                            // Call answered
+                            val currentState = _shellCallState.value
+                            if (currentState is ShellIncomingCallState.Ringing) {
+                                callStartTime = System.currentTimeMillis()
+                                isSpeaker = false
+                                isMuted = false
+
+                                _shellCallState.value = ShellIncomingCallState.Active(
+                                    phoneNumber = currentState.phoneNumber,
+                                    contactName = currentState.contactName,
+                                    connectedTime = callStartTime
+                                )
+                            }
+                        }
+                        android.telephony.TelephonyManager.EXTRA_STATE_IDLE -> {
+                            // Call ended - reset state
+                            val currentState = _shellCallState.value
+                            if (currentState !is ShellIncomingCallState.AwaitingQuickReply &&
+                                currentState !is ShellIncomingCallState.Idle) {
+                                android.util.Log.d("ShellIncomingCallHandler",
+                                    "Call ended via phone state - resetting")
+                                _shellCallState.value = ShellIncomingCallState.Idle
+                                _awaitingQuickReply.value = false
+                                isSpeaker = false
+                                isMuted = false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        try {
+            val filter = android.content.IntentFilter(android.telephony.TelephonyManager.ACTION_PHONE_STATE_CHANGED)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                // System broadcasts need RECEIVER_EXPORTED
+                context.registerReceiver(phoneStateReceiver, filter, android.content.Context.RECEIVER_EXPORTED)
+            } else {
+                context.registerReceiver(phoneStateReceiver, filter)
+            }
+            isReceiverRegistered = true
+            android.util.Log.d("ShellIncomingCallHandler", "Registered direct phone state receiver")
+        } catch (e: Exception) {
+            android.util.Log.e("ShellIncomingCallHandler", "Failed to register receiver", e)
+        }
+    }
+
+    /**
+     * Lookup contact name from phone number
+     */
+    private fun lookupContactName(phoneNumber: String): String? {
+        return try {
+            val uri = android.net.Uri.withAppendedPath(
+                ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                android.net.Uri.encode(phoneNumber)
+            )
+            context.contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(0)
+                } else null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /**
@@ -99,6 +240,43 @@ class ShellIncomingCallHandler @Inject constructor(
         return state is ShellIncomingCallState.Ringing ||
                state is ShellIncomingCallState.Active ||
                state is ShellIncomingCallState.AwaitingQuickReply
+    }
+
+    /**
+     * Check if there's a pending incoming call that should be displayed
+     * This is used when user navigates to shell while a call is ringing
+     */
+    fun hasPendingIncomingCall(): Boolean {
+        return isShellIncomingCallEnabled() && _shellCallState.value is ShellIncomingCallState.Ringing
+    }
+
+    /**
+     * Check if there's an active call in progress
+     */
+    fun hasActiveCall(): Boolean {
+        return isShellIncomingCallEnabled() && _shellCallState.value is ShellIncomingCallState.Active
+    }
+
+    /**
+     * Get the current call state for display when shell becomes visible
+     * Returns outputs that should be shown immediately when shell is opened
+     */
+    fun getPendingCallDisplay(): List<ShellOutput> {
+        if (!isShellIncomingCallEnabled()) return emptyList()
+        return getCallStateDisplay()
+    }
+
+    /**
+     * Force refresh call state - useful when shell becomes visible
+     * This ensures the call state is re-emitted for the UI to pick up
+     */
+    fun refreshCallState() {
+        val currentState = _shellCallState.value
+        if (currentState !is ShellIncomingCallState.Idle) {
+            // Re-emit the current state to trigger UI update
+            _shellCallState.value = currentState
+            android.util.Log.d("ShellIncomingCallHandler", "Refreshed call state: $currentState")
+        }
     }
 
     /**
@@ -256,6 +434,15 @@ class ShellIncomingCallHandler @Inject constructor(
             }
 
             inputLower == "q" || inputLower == "quick" || inputLower == "reply" -> {
+                // Stop ringtone first
+                try {
+                    val stopRingtoneIntent = android.content.Intent("com.example.mentra.STOP_RINGTONE")
+                    context.sendBroadcast(stopRingtoneIntent)
+                    dialerManager.silenceRinger()
+                } catch (e: Exception) {
+                    // Ignore
+                }
+
                 // Reject call and prepare for quick reply
                 incomingCallHandler.rejectCall()
 
